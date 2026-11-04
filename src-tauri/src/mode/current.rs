@@ -51,45 +51,18 @@ pub fn proxy_flags<const N: usize>(apps: [AppType; N]) -> [bool; N] {
 pub fn provider_for(
     db: &Database,
     app: &AppType,
-    purpose: Purpose,
+    _purpose: Purpose,
 ) -> Result<Option<String>, AppError> {
-    if purpose == Purpose::InUse {
-        if let Some(route) = proxy_route_row(db, app)? {
-            return Ok(Some(route.id));
-        }
-    }
+    // caswitch 只有一份激活指针：代理路由就是直连指针，`InUse` 与 `Direct` 不再分叉。
+    // 切换供应商只改这一处，代理与界面读到的自然是同一家。
     crate::settings::get_effective_current_provider(db, app)
 }
 
-/// 正在用的那一行（见 [`Purpose::InUse`]）。
+/// 正在用的那一行（见 [`Purpose::InUse`]）。单激活后它与直连指针是同一家。
 pub fn provider_in_use(db: &Database, app: &AppType) -> Result<Option<Provider>, AppError> {
-    match proxy_route_row(db, app)? {
-        Some(route) => Ok(Some(route)),
-        None => direct_provider(db, app),
-    }
+    direct_provider(db, app)
 }
 
-/// 代理模式下代理路由那一行；不在代理模式、或者路由那家在库里不存在（按直连处理）时
-/// 为 `None`。
-fn proxy_route_row(db: &Database, app: &AppType) -> Result<Option<Provider>, AppError> {
-    let mode = mode_state(app);
-    if !mode.is_proxy() {
-        return Ok(None);
-    }
-    let Some(route) = mode.proxy_route else {
-        return Ok(None);
-    };
-    let row = db.get_provider_by_id(&route, app.as_str())?;
-    if row.is_none() {
-        log::warn!(
-            "{} 的代理路由 {route} 在数据库中不存在，按直连指针处理",
-            app.as_str()
-        );
-    }
-    Ok(row)
-}
-
-/// 直连指针指向的那一行。
 pub fn direct_provider(db: &Database, app: &AppType) -> Result<Option<Provider>, AppError> {
     match provider_for(db, app, Purpose::Direct)? {
         Some(id) => db.get_provider_by_id(&id, app.as_str()),
