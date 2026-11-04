@@ -36,6 +36,7 @@ mod panic_hook;
 mod pi_config;
 mod prompt;
 mod prompt_files;
+pub mod protocol;
 mod provider;
 mod proxy;
 mod services;
@@ -63,6 +64,7 @@ pub use deeplink::{import_provider_from_deeplink, parse_deeplink_url, DeepLinkIm
 pub use error::AppError;
 pub use grok_config::get_grok_config_path;
 pub use prompt::Prompt;
+pub use protocol::{AuthStyle, Conversion, Matrix, Protocol, Transform};
 pub use provider::{Provider, ProviderMeta};
 pub use services::{
     profile::{ProfilePayload, ProfileScope, ProfileService, NO_ACTIVE_PROMPT},
