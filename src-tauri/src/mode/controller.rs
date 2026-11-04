@@ -6735,58 +6735,6 @@ model_provider = "c"
         assert_eq!(in_use(&state, &AppType::Claude).as_deref(), Some("kimi"));
         state.proxy_service.stop().await.unwrap();
     }
-
-    #[tokio::test]
-    #[serial]
-    async fn stack_mode_sends_default_requests_to_the_default_only() {
-        let _home = Home::new();
-        seed_settings(USER_SETTINGS);
-        let state = state_with(AppType::Claude, &stack_rows(), "a").await;
-        // 故障转移开着，队列里还有别家。
-        let mut config = state.db.get_proxy_config_for_app("claude").await.unwrap();
-        config.auto_failover_enabled = true;
-        state.db.update_proxy_config_for_app(config).await.unwrap();
-        for id in ["a", "kimi"] {
-            state.db.add_to_failover_queue("claude", id).unwrap();
-        }
-        let proxy = crate::proxy::server::ProxyState::for_test(state.db.clone());
-        let body = json!({ "model": "claude-sonnet-5", "messages": [] });
-        let headers = axum::http::HeaderMap::new();
-        let context = || {
-            crate::proxy::handler_context::RequestContext::new(
-                &proxy,
-                &body,
-                &headers,
-                AppType::Claude,
-                "Claude",
-                "claude",
-                None,
-            )
-        };
-        let chain = |ctx: &crate::proxy::handler_context::RequestContext| {
-            ctx.get_providers()
-                .iter()
-                .map(|provider| provider.id.clone())
-                .collect::<Vec<_>>()
-        };
-
-        enter(&state, &AppType::Claude, false)
-            .await
-            .expect("routing");
-        let ctx = context().await.expect("routing context");
-        assert_eq!(chain(&ctx), vec!["a", "kimi"]);
-        assert!(ctx.app_config.auto_failover_enabled);
-
-        enter(&state, &AppType::Claude, true)
-            .await
-            .expect("stack mode");
-        let ctx = context().await.expect("stack mode context");
-        assert_eq!(chain(&ctx), vec!["a"]);
-        assert!(!ctx.app_config.auto_failover_enabled);
-        // 队列留着，回到路由模式恢复。
-        assert_eq!(state.db.get_failover_queue("claude").unwrap().len(), 2);
-    }
-
     #[tokio::test]
     #[serial]
     async fn official_accounts_cannot_be_stacked() {

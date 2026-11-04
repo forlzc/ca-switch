@@ -147,91 +147,10 @@ fn is_claude_model_discovery(uri: &axum::http::Uri, headers: &axum::http::Header
 
 /// Claude Code 的 Stack 模型列表（Anthropic 形状）。只读数据库和 `live-state.json`，不做网络
 /// 请求：客户端只等 3 秒。不在代理模式、名单为空时返回空列表。
-fn claude_model_discovery(state: &ProxyState) -> Value {
-    let models = crate::mode::stack::claude_published_now(&state.db).unwrap_or_else(|error| {
-        log::warn!("[Claude] 读取 Stack 模型失败，返回空列表: {error}");
-        Vec::new()
-    });
-    let data: Vec<Value> = models
-        .into_iter()
-        .map(|model| {
-            json!({
-                "type": "model",
-                "id": model.id,
-                "display_name": model.display_name,
-                "description": model.description,
-            })
-        })
-        .collect();
-    json!({
-        "data": data,
-        "has_more": false,
-    })
-}
-
-/// Stack 模型（`mode::stack`）：请求带保留前缀的模型 id 时，查出 Stack 里的那一家，把请求体的
-/// `model` 换成上游名。解不出来（成员已移除、供应商已删除、key 没登记）就按客户端的协议
-/// 直接返回错误，不回落到默认路由。
-///
-/// 对 Claude Code、Codex、Claude Desktop 生效：同一个 handler 也服务 Grok Build，它的模型名
-/// 不解码。普通模型名不读任何状态，路由请求的路径不变。
-///
-/// `Err` 是在进入路由之前就拒绝的请求，直接返回给客户端（装箱：`Response` 太大）。
-fn resolve_stack_target(
-    state: &ProxyState,
-    app_type: &AppType,
-    body: &mut Value,
-) -> Result<Option<crate::mode::stack::StackTarget>, Box<axum::response::Response>> {
-    use crate::mode::stack::{self, Decoded, Resolved};
-
-    let Some(model) = body.get("model").and_then(Value::as_str) else {
-        return Ok(None);
-    };
-    if matches!(stack::decode(app_type, model), Decoded::Plain) {
-        return Ok(None);
-    }
-    let model = model.to_string();
-    let resolved = stack::resolve(
-        &state.db,
-        &crate::live::engine::DeviceStore::for_device(),
-        app_type,
-        &model,
-    )
-    .map_err(|error| Box::new(ProxyError::DatabaseError(error.to_string()).into_response()))?;
-    match resolved {
-        Resolved::Plain => Ok(None),
-        Resolved::Hit(target) => {
-            body["model"] = Value::String(target.upstream_model.clone());
-            Ok(Some(*target))
-        }
-        Resolved::Miss(miss) => {
-            let message = miss.message(&model);
-            log::warn!("[{}] {message}", app_type.as_str());
-            let body = stack_miss_body(app_type, &message);
-            Err(Box::new(
-                (StatusCode::BAD_REQUEST, Json(body)).into_response(),
-            ))
-        }
-    }
-}
-
-/// Stack 模型解不出来时的错误体：Claude Code、Claude Desktop 用 Anthropic 的错误信封，Codex 用
-/// OpenAI 的。
-fn stack_miss_body(app_type: &AppType, message: &str) -> Value {
-    match app_type {
-        AppType::Claude | AppType::ClaudeDesktop => json!({
-            "type": "error",
-            "error": { "type": "invalid_request_error", "message": message },
-        }),
-        _ => json!({
-            "error": {
-                "message": message,
-                "type": "invalid_request_error",
-                "param": "model",
-                "code": "model_not_found",
-            }
-        }),
-    }
+fn claude_model_discovery(_state: &ProxyState) -> Value {
+    // Stack 模式已移除，caswitch 也不再替客户端维护模型清单：这条端点保持空列表，
+    // Claude Code 会退回自己的内置模型表。P3 落地「默认模型」后再公布那一个。
+    json!({ "data": [], "has_more": false })
 }
 
 // ============================================================================
@@ -277,37 +196,8 @@ pub async fn handle_claude_desktop_models(
         .await
         .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
     let provider = providers.first().ok_or(ProxyError::NoAvailableProvider)?;
-    let mut response = crate::claude_desktop_config::model_list_response(provider)
+    let response = crate::claude_desktop_config::model_list_response(provider)
         .map_err(|e| ProxyError::ConfigError(e.to_string()))?;
-    // 聚合的模型 Desktop 只从 profile 里拿，这里补上是为了带上说明，两边也一致
-    let stacked = crate::mode::stack::desktop_published_now(&state.db).unwrap_or_else(|error| {
-        log::warn!("[Claude Desktop] 读取聚合模型失败，只返回路由那家的: {error}");
-        Vec::new()
-    });
-    if let Some(data) = response.get_mut("data").and_then(Value::as_array_mut) {
-        data.extend(stacked.into_iter().map(|model| {
-            let mut item = json!({
-                "type": "model",
-                "id": model.id,
-                "display_name": model.label,
-                "created_at": crate::claude_desktop_config::DEFAULT_CREATED_AT,
-            });
-            if model.supports_1m {
-                item["supports1m"] = json!(true);
-            }
-            item["description"] =
-                json!(crate::claude_desktop_config::discovered_model_description(
-                    &model.provider_name,
-                    &model.upstream,
-                    model.supports_1m,
-                ));
-            item
-        }));
-        let last_id = data.last().and_then(|item| item.get("id")).cloned();
-        if let Some(last_id) = last_id {
-            response["last_id"] = last_id;
-        }
-    }
     Ok(Json(response))
 }
 
@@ -329,24 +219,12 @@ async fn handle_messages_for_app(
         .await
         .map_err(|e| ProxyError::Internal(format!("Failed to read request body: {e}")))?
         .to_bytes();
-    let mut body: Value = serde_json::from_slice(&body_bytes)
+    let body: Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?;
     drop(body_bytes);
-    let stack = match resolve_stack_target(&state, &app_type, &mut body) {
-        Ok(stack) => stack,
-        Err(rejected) => return Ok(*rejected),
-    };
 
-    let mut ctx = RequestContext::new(
-        &state,
-        &body,
-        &headers,
-        app_type.clone(),
-        tag,
-        app_type_str,
-        stack,
-    )
-    .await?;
+    let mut ctx =
+        RequestContext::new(&state, &body, &headers, app_type.clone(), tag, app_type_str).await?;
 
     let raw_endpoint = uri
         .path_and_query()
@@ -982,24 +860,12 @@ pub async fn handle_chat_completions(
         .map_err(|e| ProxyError::Internal(format!("Failed to read request body: {e}")))?
         .to_bytes();
     let body_bytes = decode_codex_request_body(&mut headers, body_bytes)?;
-    let mut body: Value = serde_json::from_slice(&body_bytes)
+    let body: Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?;
     drop(body_bytes);
-    let stack = match resolve_stack_target(&state, &AppType::Codex, &mut body) {
-        Ok(stack) => stack,
-        Err(rejected) => return Ok(*rejected),
-    };
 
-    let mut ctx = RequestContext::new(
-        &state,
-        &body,
-        &headers,
-        AppType::Codex,
-        "Codex",
-        "codex",
-        stack,
-    )
-    .await?;
+    let mut ctx =
+        RequestContext::new(&state, &body, &headers, AppType::Codex, "Codex", "codex").await?;
     let endpoint = endpoint_with_query(&uri, "/chat/completions");
 
     let is_stream = body
@@ -1103,24 +969,12 @@ async fn handle_responses_for_app(
         .map_err(|e| ProxyError::Internal(format!("Failed to read request body: {e}")))?
         .to_bytes();
     let body_bytes = decode_codex_request_body(&mut headers, body_bytes)?;
-    let mut body: Value = serde_json::from_slice(&body_bytes)
+    let body: Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?;
     drop(body_bytes);
-    let stack = match resolve_stack_target(&state, &app_type, &mut body) {
-        Ok(stack) => stack,
-        Err(rejected) => return Ok(*rejected),
-    };
 
-    let mut ctx = RequestContext::new(
-        &state,
-        &body,
-        &headers,
-        app_type.clone(),
-        tag,
-        app_type_str,
-        stack,
-    )
-    .await?;
+    let mut ctx =
+        RequestContext::new(&state, &body, &headers, app_type.clone(), tag, app_type_str).await?;
     let endpoint = endpoint_with_query(&uri, "/responses");
 
     let is_stream = body
@@ -1356,16 +1210,8 @@ async fn handle_codex_standalone_passthrough(
         .map_err(|e| ProxyError::InvalidRequest(format!("Failed to parse request body: {e}")))?;
     drop(body_bytes);
 
-    let mut ctx = RequestContext::new(
-        &state,
-        &body,
-        &headers,
-        AppType::Codex,
-        "Codex",
-        "codex",
-        None,
-    )
-    .await?;
+    let mut ctx =
+        RequestContext::new(&state, &body, &headers, AppType::Codex, "Codex", "codex").await?;
     let endpoint = endpoint_with_query(&uri, canonical_endpoint);
 
     let forwarder = ctx.create_forwarder(&state);
@@ -1439,25 +1285,13 @@ async fn handle_responses_compact_for_app(
         .map_err(|e| ProxyError::Internal(format!("Failed to read request body: {e}")))?
         .to_bytes();
     let body_bytes = decode_codex_request_body(&mut headers, body_bytes)?;
-    let mut body: Value = serde_json::from_slice(&body_bytes)
+    let body: Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?;
     drop(body_bytes);
     // 压缩请求也带着客户端选中的模型：不解码的话，会带着前缀落到默认路由。
-    let stack = match resolve_stack_target(&state, &app_type, &mut body) {
-        Ok(stack) => stack,
-        Err(rejected) => return Ok(*rejected),
-    };
 
-    let mut ctx = RequestContext::new(
-        &state,
-        &body,
-        &headers,
-        app_type.clone(),
-        tag,
-        app_type_str,
-        stack,
-    )
-    .await?;
+    let mut ctx =
+        RequestContext::new(&state, &body, &headers, app_type.clone(), tag, app_type_str).await?;
     let endpoint = endpoint_with_query(&uri, "/responses/compact");
 
     let is_stream = body
@@ -2582,17 +2416,9 @@ pub async fn handle_gemini(
     drop(body_bytes);
 
     // Gemini 的模型名称在 URI 中
-    let mut ctx = RequestContext::new(
-        &state,
-        &body,
-        &headers,
-        AppType::Gemini,
-        "Gemini",
-        "gemini",
-        None,
-    )
-    .await?
-    .with_model_from_uri(&uri);
+    let mut ctx = RequestContext::new(&state, &body, &headers, AppType::Gemini, "Gemini", "gemini")
+        .await?
+        .with_model_from_uri(&uri);
 
     // 提取完整的路径和查询参数
     let endpoint = uri
@@ -4111,7 +3937,6 @@ data: [DONE]\n\n";
     #[tokio::test]
     async fn claude_model_validation_receives_json_when_upstream_forces_sse() {
         use crate::app_config::AppType;
-        use crate::mode::stack::StackTarget;
         use crate::provider::Provider;
         use crate::proxy::{
             handler_context::RequestContext, hyper_client::ProxyResponse, server::ProxyState,
@@ -4129,18 +3954,14 @@ data: [DONE]\n\n";
             json!({}),
             None,
         );
-        let ctx = RequestContext::new(
+        let ctx = RequestContext::with_provider(
             &state,
             &request,
             &HeaderMap::new(),
             AppType::Claude,
             "Claude",
             "claude",
-            Some(StackTarget {
-                provider,
-                upstream_model: model.into(),
-                original_model: model.into(),
-            }),
+            provider,
         )
         .await
         .unwrap();
@@ -4583,26 +4404,15 @@ data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\"}}\n
 }
 
 #[cfg(test)]
-mod stack_tests {
-    //! Stack 模型的入口：解不出来的带前缀 id 按客户端协议报错，不回落到默认路由；
-    //! `/v1/models` 按请求方返回各自的形状。
+mod entry_model_tests {
+    //! 入口处的模型名处理：请求体模型原样带走（Stack 已移除），`/v1/models`
+    //! 与 Codex 的目录探测要能区分开。
     use super::*;
     use crate::database::Database;
     use std::sync::Arc;
 
     fn proxy_state() -> ProxyState {
         ProxyState::for_test(Arc::new(Database::memory().expect("memory db")))
-    }
-
-    fn post(path: &str, model: &str) -> axum::extract::Request {
-        axum::http::Request::builder()
-            .method("POST")
-            .uri(path)
-            .header("content-type", "application/json")
-            .body(axum::body::Body::from(
-                json!({ "model": model, "messages": [], "input": [] }).to_string(),
-            ))
-            .unwrap()
     }
 
     async fn json_of(response: axum::response::Response) -> (StatusCode, Value) {
@@ -4614,21 +4424,16 @@ mod stack_tests {
     #[tokio::test]
     async fn gemini_http_overflow_reaches_codex_as_a_failed_stream() {
         let state = proxy_state();
-        let model = "ccs-gemini/gemini-3.8-flash-high";
         let provider =
             crate::provider::Provider::with_id("gemini".into(), "Gemini".into(), json!({}), None);
-        let ctx = RequestContext::new(
+        let ctx = RequestContext::with_provider(
             &state,
-            &json!({}),
+            &json!({ "model": "gemini-3.8-flash-high" }),
             &axum::http::HeaderMap::new(),
             AppType::Codex,
             "Codex",
             "codex",
-            Some(crate::mode::stack::StackTarget {
-                provider,
-                upstream_model: "gemini-3.8-flash-high".into(),
-                original_model: model.into(),
-            }),
+            provider,
         )
         .await
         .unwrap();
@@ -4653,7 +4458,8 @@ mod stack_tests {
             let event: Value = serde_json::from_str(data).unwrap();
             assert_eq!(event["type"], "response.failed");
             assert_eq!(event["response"]["status"], "failed");
-            assert_eq!(event["response"]["model"], model);
+            // Stack 已移除：发给上游的模型名就是请求体里那个
+            assert_eq!(event["response"]["model"], "gemini-3.8-flash-high");
             assert_eq!(
                 event["response"]["error"]["code"],
                 "context_length_exceeded"
@@ -4685,121 +4491,6 @@ mod stack_tests {
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"]["code"], 400);
     }
-
-    #[tokio::test]
-    async fn unresolvable_stacked_ids_are_rejected_in_the_clients_protocol() {
-        // 名单为空、没有任何供应商：回落到默认路由的话会报「没有供应商」，而不是 400。
-        let state = proxy_state();
-
-        let response = handle_messages(
-            State(state.clone()),
-            post("/v1/messages", "ccs-claude-kimi--kimi-k3"),
-        )
-        .await
-        .expect("response");
-        let (status, body) = json_of(response).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(body["type"], "error");
-        assert_eq!(body["error"]["type"], "invalid_request_error");
-        assert!(body["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("ccs-claude-kimi--kimi-k3"));
-
-        for response in [
-            handle_responses(
-                State(state.clone()),
-                post("/v1/responses", "ccs-kimi/kimi-k3"),
-            )
-            .await
-            .expect("responses"),
-            handle_responses_compact(
-                State(state.clone()),
-                post("/v1/responses/compact", "ccs-kimi/kimi-k3"),
-            )
-            .await
-            .expect("compact"),
-            handle_chat_completions(
-                State(state.clone()),
-                post("/v1/chat/completions", "ccs-kimi/kimi-k3"),
-            )
-            .await
-            .expect("chat"),
-        ] {
-            let (status, body) = json_of(response).await;
-            assert_eq!(status, StatusCode::BAD_REQUEST);
-            assert_eq!(body["error"]["type"], "invalid_request_error");
-            assert_eq!(body["error"]["code"], "model_not_found");
-        }
-
-        // 普通模型名照旧走代理路由（这里没有供应商，所以是路由那边的错误）。
-        let routed = handle_messages(
-            State(state.clone()),
-            post("/v1/messages", "claude-sonnet-5"),
-        )
-        .await;
-        assert!(routed.is_err());
-        let routed = handle_grokbuild_responses(
-            State(state),
-            post("/grokbuild/v1/responses", "ccs-kimi/kimi-k3"),
-        )
-        .await;
-        assert!(routed.is_err(), "Grok Build model ids are not decoded");
-    }
-
-    #[tokio::test]
-    async fn stacked_requests_go_to_one_provider_without_failover_timeouts() {
-        let state = proxy_state();
-        // 应用开了故障转移、配了很短的超时，队列里还有别家。
-        let mut config = state.db.get_proxy_config_for_app("claude").await.unwrap();
-        config.auto_failover_enabled = true;
-        config.max_retries = 3;
-        config.non_streaming_timeout = 1;
-        config.streaming_first_byte_timeout = 1;
-        config.streaming_idle_timeout = 1;
-        state.db.update_proxy_config_for_app(config).await.unwrap();
-        let kimi = crate::provider::Provider::with_id(
-            "kimi".to_string(),
-            "Kimi".to_string(),
-            json!({ "env": { "ANTHROPIC_MODEL": "kimi-k3" } }),
-            None,
-        );
-        let target = crate::mode::stack::StackTarget {
-            provider: kimi,
-            upstream_model: "kimi-k3".to_string(),
-            original_model: "ccs-claude-kimi--kimi-k3".to_string(),
-        };
-        let body = json!({ "model": "kimi-k3", "messages": [] });
-
-        let ctx = RequestContext::new(
-            &state,
-            &body,
-            &axum::http::HeaderMap::new(),
-            AppType::Claude,
-            "Claude",
-            "claude",
-            Some(target),
-        )
-        .await
-        .expect("context");
-
-        assert!(ctx.is_stack);
-        assert_eq!(
-            ctx.get_providers()
-                .iter()
-                .map(|provider| provider.id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["kimi"]
-        );
-        assert_eq!(ctx.request_model, "ccs-claude-kimi--kimi-k3");
-        assert!(!ctx.app_config.auto_failover_enabled);
-        let streaming = ctx.streaming_timeout_config();
-        assert_eq!(
-            (streaming.first_byte_timeout, streaming.idle_timeout),
-            (0, 0)
-        );
-    }
-
     #[test]
     fn claude_model_discovery_is_told_apart_from_the_codex_catalog_probe() {
         let uri = |text: &str| text.parse::<axum::http::Uri>().unwrap();
