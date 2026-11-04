@@ -8,6 +8,8 @@
 use super::{AuthInfo, AuthStrategy, ProviderAdapter};
 use crate::provider::{CodexChatReasoningConfig, Provider};
 use crate::proxy::error::ProxyError;
+// 解析实现与迁移脚本共用一份，放在 protocol::infer 里
+use crate::protocol::infer::codex_wire_api_from_toml as extract_codex_wire_api_from_toml;
 use regex::Regex;
 use serde_json::Value as JsonValue;
 use std::collections::HashSet;
@@ -925,25 +927,6 @@ pub fn is_origin_only_url(value: &str) -> bool {
         Some((_scheme, rest)) => !rest.contains('/'),
         None => !trimmed.contains('/'),
     }
-}
-
-fn extract_codex_wire_api_from_toml(config_text: &str) -> Option<String> {
-    let doc = config_text.parse::<TomlValue>().ok()?;
-
-    if let Some(active_provider) = doc.get("model_provider").and_then(|v| v.as_str()) {
-        if let Some(wire_api) = doc
-            .get("model_providers")
-            .and_then(|providers| providers.get(active_provider))
-            .and_then(|provider| provider.get("wire_api"))
-            .and_then(|v| v.as_str())
-        {
-            return Some(wire_api.to_string());
-        }
-    }
-
-    doc.get("wire_api")
-        .and_then(|v| v.as_str())
-        .map(ToString::to_string)
 }
 
 fn extract_codex_model_from_toml(config_text: &str) -> Option<String> {

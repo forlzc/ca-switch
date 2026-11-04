@@ -107,6 +107,19 @@ impl FromStr for Protocol {
     }
 }
 
+/// 协议判定的证据强度。迁移时落进 `providers.protocol_source`，
+/// `Guessed` 的供应商在列表里要打角标让用户确认。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProtocolSource {
+    /// 用户显式选过（`meta.apiFormat`）。
+    Explicit,
+    /// 从配置内容读出来的可靠证据（codex `wire_api`、端点后缀、家族唯一）。
+    Inferred,
+    /// 没有任何证据，按家族惯例推的，需要确认。
+    Guessed,
+}
+
 /// 上游鉴权方式。
 ///
 /// 与协议正交：同一个 responses 协议，既可能是 Bearer API key，也可能是
@@ -255,6 +268,275 @@ impl Matrix {
             }
         }
         out
+    }
+}
+
+/// 从供应商配置推断协议。
+///
+/// caswitch 不再有"每客户端一个默认协议"：协议是供应商自身的属性。历史数据里
+/// 没有这一列，只能按证据链推。证据从强到弱四级，命中即返回：
+///
+/// 1. `meta.apiFormat`（用户当年显式选过的格式）
+/// 2. codex TOML 里的 `wire_api`
+/// 3. `settings_config` 里 base URL 的端点后缀
+/// 4. 家族惯例兜底
+///
+/// 推断结果同时给出证据强度，`Guessed` 需要在首屏让用户确认。
+pub mod infer {
+    use super::{Protocol, ProtocolSource};
+    use crate::app_config::AppType;
+    use crate::provider::Provider;
+    use serde_json::Value;
+    use toml::Value as TomlValue;
+
+    /// 读 codex 供应商 TOML 里的 `wire_api`。
+    ///
+    /// 优先读 `model_provider` 指向的那个 `[model_providers.*]`，读不到再退回顶层
+    /// `wire_api`。原实现在 `proxy/providers/codex.rs`，为保证代理热路径与迁移
+    /// 脚本用同一份判定，移到这里集中维护。
+    pub(crate) fn codex_wire_api_from_toml(config_text: &str) -> Option<String> {
+        let doc = config_text.parse::<TomlValue>().ok()?;
+
+        if let Some(active_provider) = doc.get("model_provider").and_then(|v| v.as_str()) {
+            if let Some(wire_api) = doc
+                .get("model_providers")
+                .and_then(|providers| providers.get(active_provider))
+                .and_then(|provider| provider.get("wire_api"))
+                .and_then(|v| v.as_str())
+            {
+                return Some(wire_api.to_string());
+            }
+        }
+
+        doc.get("wire_api")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string)
+    }
+
+    /// 推断某个供应商的协议。
+    ///
+    /// `app` 只在最后一级兜底时用到——协议化之后运行期没有 `AppType`，
+    /// 迁移脚本会把它作为"原客户端家族"的线索传进来。
+    pub fn of_provider(app: &AppType, provider: &Provider) -> (Protocol, ProtocolSource) {
+        // 1. 显式选择
+        if let Some(raw) = provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.api_format.as_deref())
+        {
+            if let Some(protocol) = Protocol::from_api_format(raw) {
+                return (protocol, ProtocolSource::Explicit);
+            }
+        }
+
+        // 2. codex TOML 的 wire_api
+        if let Some(config_text) = provider
+            .settings_config
+            .get("config")
+            .and_then(|value| value.as_str())
+        {
+            if let Some(wire_api) = codex_wire_api_from_toml(config_text) {
+                if let Some(protocol) = Protocol::from_api_format(&wire_api) {
+                    return (protocol, ProtocolSource::Inferred);
+                }
+            }
+        }
+
+        // 3. 端点后缀
+        if let Some(protocol) = protocol_from_endpoint_markers(&provider.settings_config) {
+            return (protocol, ProtocolSource::Inferred);
+        }
+
+        // 4. 家族惯例
+        let protocol = Protocol::from_app_type(app);
+        let source = match protocol {
+            // Claude Code 只会说 Anthropic，Gemini 家族只会说 Gemini，这两条几乎是定论
+            Protocol::Anthropic | Protocol::Gemini => ProtocolSource::Inferred,
+            // codex 缺 wire_api、以及 openai 兼容工具族，都可能是 chat 也可能是 responses
+            Protocol::OpenAiChat | Protocol::OpenAiResponses => ProtocolSource::Guessed,
+        };
+        (protocol, source)
+    }
+
+    /// 从 `settings_config` 里的 base URL 找端点证据。
+    ///
+    /// 只认带端点路径的 URL：`https://relay.example.com` 这种纯 origin 推不出协议
+    /// （同一个 origin 既有 chat 也有 responses），必须留给下一级兜底。
+    fn protocol_from_endpoint_markers(settings: &Value) -> Option<Protocol> {
+        let mut urls = Vec::new();
+        collect_base_urls(settings, &mut urls);
+        urls.iter().find_map(|url| protocol_from_url(url))
+    }
+
+    fn collect_base_urls(value: &Value, out: &mut Vec<String>) {
+        match value {
+            Value::Object(map) => {
+                for (key, val) in map {
+                    let lower = key.to_ascii_lowercase();
+                    // 兼容 `base_url` / `baseUrl` / `ANTHROPIC_BASE_URL` /
+                    // `GOOGLE_GEMINI_BASE_URL` 这些写法
+                    if matches!(
+                        lower.as_str(),
+                        "base_url" | "baseurl" | "api_base" | "api_endpoint"
+                    ) || lower.ends_with("_base_url")
+                        || lower.ends_with("_baseurl")
+                    {
+                        if let Some(text) = val.as_str() {
+                            out.push(text.to_string());
+                        }
+                    }
+                    collect_base_urls(val, out);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    collect_base_urls(item, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn protocol_from_url(url: &str) -> Option<Protocol> {
+        let url = url.trim().trim_end_matches('/').to_ascii_lowercase();
+
+        // Gemini 的路径带 version 段，且模型名在路径里，没有统一的端点尾巴
+        if url.contains("/v1beta") {
+            return Some(Protocol::Gemini);
+        }
+        if url.ends_with("/v1/messages") || url.ends_with("/messages") {
+            return Some(Protocol::Anthropic);
+        }
+        if url.ends_with("/v1/responses") || url.ends_with("/responses") {
+            return Some(Protocol::OpenAiResponses);
+        }
+        if url.ends_with("/v1/chat/completions") || url.ends_with("/chat/completions") {
+            return Some(Protocol::OpenAiChat);
+        }
+        None
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::provider::ProviderMeta;
+        use serde_json::json;
+
+        fn provider(settings: Value, api_format: Option<&str>) -> Provider {
+            Provider {
+                id: "p".to_string(),
+                name: "p".to_string(),
+                settings_config: settings,
+                website_url: None,
+                category: None,
+                created_at: None,
+                sort_index: None,
+                notes: None,
+                meta: api_format.map(|value| ProviderMeta {
+                    api_format: Some(value.to_string()),
+                    ..Default::default()
+                }),
+                icon: None,
+                icon_color: None,
+                in_failover_queue: false,
+            }
+        }
+
+        #[test]
+        fn explicit_api_format_wins_over_everything_else() {
+            // URL 看着像 anthropic，但用户显式选了 openai_chat
+            let p = provider(
+                json!({ "env": { "ANTHROPIC_BASE_URL": "https://relay.example.com/v1/messages" } }),
+                Some("openai_chat"),
+            );
+            assert_eq!(
+                of_provider(&AppType::Claude, &p),
+                (Protocol::OpenAiChat, ProtocolSource::Explicit)
+            );
+        }
+
+        #[test]
+        fn codex_wire_api_is_read_from_the_active_provider_table() {
+            let toml = r#"
+model_provider = "relay"
+model = "gpt-5"
+
+[model_providers.relay]
+base_url = "https://relay.example.com/v1"
+wire_api = "chat"
+"#;
+            let p = provider(json!({ "config": toml }), None);
+            assert_eq!(
+                of_provider(&AppType::Codex, &p),
+                (Protocol::OpenAiChat, ProtocolSource::Inferred)
+            );
+        }
+
+        #[test]
+        fn codex_wire_api_anthropic_is_recognised() {
+            let toml =
+                "model_provider = \"relay\"\n\n[model_providers.relay]\nwire_api = \"anthropic\"\n";
+            let p = provider(json!({ "config": toml }), None);
+            assert_eq!(
+                of_provider(&AppType::Codex, &p),
+                (Protocol::Anthropic, ProtocolSource::Inferred)
+            );
+        }
+
+        #[test]
+        fn endpoint_suffix_decides_when_there_is_no_explicit_format() {
+            let p = provider(
+                json!({ "env": { "OPENAI_BASE_URL": "https://relay.example.com/v1/responses" } }),
+                None,
+            );
+            assert_eq!(
+                of_provider(&AppType::OpenClaw, &p),
+                (Protocol::OpenAiResponses, ProtocolSource::Inferred)
+            );
+        }
+
+        #[test]
+        fn gemini_endpoint_is_recognised_by_version_segment() {
+            let p = provider(
+                json!({ "env": { "GOOGLE_GEMINI_BASE_URL": "https://gw.example.com/v1beta" } }),
+                None,
+            );
+            assert_eq!(
+                of_provider(&AppType::Agy, &p),
+                (Protocol::Gemini, ProtocolSource::Inferred)
+            );
+        }
+
+        #[test]
+        fn bare_origin_falls_back_to_family() {
+            // 纯 origin 推不出协议，只能按家族
+            let p = provider(
+                json!({ "env": { "ANTHROPIC_BASE_URL": "https://api.anthropic.com" } }),
+                None,
+            );
+            assert_eq!(
+                of_provider(&AppType::Claude, &p),
+                (Protocol::Anthropic, ProtocolSource::Inferred)
+            );
+        }
+
+        #[test]
+        fn codex_without_wire_api_is_flagged_as_guess() {
+            let p = provider(json!({ "env": {} }), None);
+            assert_eq!(
+                of_provider(&AppType::Codex, &p),
+                (Protocol::OpenAiResponses, ProtocolSource::Guessed)
+            );
+        }
+
+        #[test]
+        fn openai_compatible_tools_default_to_chat_and_are_flagged() {
+            let p = provider(json!({ "base_url": "https://relay.example.com" }), None);
+            assert_eq!(
+                of_provider(&AppType::OpenCode, &p),
+                (Protocol::OpenAiChat, ProtocolSource::Guessed)
+            );
+        }
     }
 }
 
