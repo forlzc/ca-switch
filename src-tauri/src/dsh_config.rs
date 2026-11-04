@@ -443,6 +443,7 @@ fn edit_files_and_commit<T>(
 }
 
 #[cfg(test)]
+#[allow(dead_code)] // MCP 支持已移除，这些写盘助手目前只被测试引用
 fn edit_path_and_commit<T>(
     path: &Path,
     edit: impl FnOnce(&str) -> Result<String, AppError>,
@@ -1099,54 +1100,6 @@ fn existing_mcp_entry(text: &str, id: &str) -> Result<Option<Yaml>, AppError> {
         .next();
     Ok(found)
 }
-
-/// Compare existing copies, preferring the displayed profile when it has one. A missing copy
-/// is expected when a profile was initialized later; only differing contents are a conflict.
-fn ensure_mcp_copies_agree(
-    paths: &[PathBuf],
-    authoritative: usize,
-    texts: &[String],
-    id: &str,
-) -> Result<Option<Yaml>, AppError> {
-    let mut source = texts
-        .get(authoritative)
-        .map(|text| existing_mcp_entry(text, id))
-        .transpose()?
-        .flatten()
-        .map(|entry| (authoritative, entry));
-    for (index, text) in texts.iter().enumerate() {
-        let Some(copy) = existing_mcp_entry(text, id)? else {
-            continue;
-        };
-        if let Some((source_index, source)) = &source {
-            if copy != *source {
-                return Err(diverged_mcp_error(
-                    id,
-                    paths.get(index),
-                    paths.get(*source_index),
-                ));
-            }
-        } else {
-            source = Some((index, copy));
-        }
-    }
-    Ok(source.map(|(_, entry)| entry))
-}
-
-fn diverged_mcp_error(id: &str, other: Option<&PathBuf>, source: Option<&PathBuf>) -> AppError {
-    let other = other.map(|path| profile_name(path)).unwrap_or_default();
-    let source = source.map(|path| profile_name(path)).unwrap_or_default();
-    AppError::localized(
-        "dsh.mcp_diverged",
-        format!(
-            "MCP 服务器 '{id}' 在 profile '{other}' 里的配置与 '{source}' 不同；改写会覆盖你在 DeepSeek Harness 里对 '{other}' 做的修改。请先在 DeepSeek Harness 里把两者改成一致，或手动编辑 profiles/{other}/cordis.patch.yml。"
-        ),
-        format!(
-            "MCP server '{id}' differs between the '{other}' and '{source}' profiles; writing would discard your changes in '{other}'. Make them identical in DeepSeek Harness, or edit profiles/{other}/cordis.patch.yml directly."
-        ),
-    )
-}
-
 /// The native `llm-pi-ai` provider node for an editor config, and the credentials text with a new
 /// key stored under CC Switch's reference (unchanged when the key is unchanged).
 fn native_provider(
@@ -1269,49 +1222,6 @@ pub(crate) fn provider_key_exists(id: &str) -> Result<bool, AppError> {
     }
     Ok(false)
 }
-
-/// MCP servers as shown in CC Switch, read from the display profile ([`config_path`]).
-/// MCP servers as shown in CC Switch: every initialized profile, authoritative profile first,
-/// one entry per server name.
-pub(crate) fn mcp_entries() -> Result<Vec<Yaml>, AppError> {
-    let authoritative = config_path();
-    let mut merged: Vec<Yaml> = Vec::new();
-    let mut names: Vec<String> = Vec::new();
-    for path in read_paths() {
-        let entries = match mcp_entries_from(&read_text(&path)?) {
-            Ok(entries) => entries,
-            // 权威 profile 读不出来时照旧报错；其余 profile 只跳过并记日志。
-            Err(error) if path != authoritative => {
-                log::warn!(
-                    "跳过无法解析的 DeepSeek Harness profile {}: {error}",
-                    path.display()
-                );
-                continue;
-            }
-            Err(error) => return Err(error),
-        };
-        for entry in entries {
-            let name = entry["config"]["serverName"]
-                .as_str()
-                .map(str::to_owned)
-                .unwrap_or_else(|| format!("{entry:?}"));
-            if names.contains(&name) {
-                continue;
-            }
-            names.push(name);
-            merged.push(entry);
-        }
-    }
-    Ok(merged)
-}
-
-fn mcp_entries_from(text: &str) -> Result<Vec<Yaml>, AppError> {
-    Ok(plugin_entries(&entries(text)?)
-        .filter(|(_, _, entry)| entry["name"].as_str() == Some("@deepseek-ai/dsh-mcp-client"))
-        .map(|(_, _, entry)| entry.clone())
-        .collect())
-}
-
 fn plugin_entries(patches: &[Yaml]) -> impl Iterator<Item = (usize, Option<usize>, &Yaml)> {
     patches.iter().enumerate().flat_map(|(index, patch)| {
         std::iter::once((index, None, patch)).chain(
@@ -1324,16 +1234,6 @@ fn plugin_entries(patches: &[Yaml]) -> impl Iterator<Item = (usize, Option<usize
         )
     })
 }
-
-/// Write one MCP server into every target profile as one change ([`edit_files_and_commit`]).
-pub(crate) fn sync_mcp_and_commit<T>(
-    id: &str,
-    spec: Option<&Value>,
-    commit: impl FnOnce() -> Result<T, AppError>,
-) -> Result<T, AppError> {
-    sync_mcp_files_and_commit(&target_paths(), id, spec, commit)
-}
-
 #[cfg(test)]
 fn sync_mcp_file_and_commit<T>(
     path: &Path,
@@ -1343,40 +1243,12 @@ fn sync_mcp_file_and_commit<T>(
 ) -> Result<T, AppError> {
     sync_mcp_files_and_commit(&[path.to_path_buf()], id, spec, commit)
 }
-
-fn sync_mcp_files_and_commit<T>(
-    paths: &[PathBuf],
-    id: &str,
-    spec: Option<&Value>,
-    commit: impl FnOnce() -> Result<T, AppError>,
-) -> Result<T, AppError> {
-    let paths: Vec<_> = if spec.is_none() {
-        paths.iter().filter(|path| path.exists()).cloned().collect()
-    } else {
-        paths.to_vec()
-    };
-    if paths.is_empty() {
-        return commit();
-    }
-    if let Some(spec) = spec {
-        validate_mcp_spec(id, spec)?;
-    }
-    edit_files_and_commit(
-        &paths,
-        |texts| {
-            let authoritative = authoritative_index(&paths);
-            let source = ensure_mcp_copies_agree(&paths, authoritative, texts, id)?;
-            texts
-                .iter()
-                .map(|text| mcp_edit_with_source(text, id, spec, source.as_ref()))
-                .collect()
-        },
-        commit,
-    )
-}
-
 fn validate_mcp_spec(id: &str, spec: &Value) -> Result<(), AppError> {
-    crate::mcp::validation::validate_server_spec(spec)?;
+    if !spec.is_object() {
+        return Err(AppError::InvalidInput(
+            "MCP 服务器定义必须为 JSON 对象".into(),
+        ));
+    }
     if spec["type"] == "sse" {
         return Err(AppError::InvalidInput("DeepSeek Harness supports stdio and Streamable HTTP MCP; use an HTTP endpoint instead of SSE".into()));
     }
@@ -1392,24 +1264,6 @@ fn validate_mcp_spec(id: &str, spec: &Value) -> Result<(), AppError> {
     }
     Ok(())
 }
-
-/// A missing copy inherits native plugin IDs and extension fields from an existing copy, so
-/// creating it does not manufacture a conflict on the next edit or deletion.
-fn mcp_edit_with_source(
-    text: &str,
-    id: &str,
-    spec: Option<&Value>,
-    source: Option<&Yaml>,
-) -> Result<String, AppError> {
-    if let Some(source) = source.filter(|_| spec.is_some()) {
-        if existing_mcp_entry(text, id)?.is_none() {
-            let seeded = insert_mcp_entry(text, source)?;
-            return mcp_edit(&seeded, id, spec);
-        }
-    }
-    mcp_edit(text, id, spec)
-}
-
 fn insert_mcp_entry(text: &str, entry: &Yaml) -> Result<String, AppError> {
     // serde_yaml does not round-trip native !!js tags. Refuse dynamic nodes before copying.
     serde_json::to_value(entry).map_err(|_| {
@@ -1940,701 +1794,111 @@ mod tests {
             "!!js not a tag"
         );
     }
+}
 
-    #[test]
-    fn malformed_yaml_and_duplicate_overrides_are_rejected() {
-        for text in [
-            "{broken",
-            "providers: {}",
-            "- id: llm-pi-ai\n- id: llm-pi-ai\n",
-        ] {
-            assert!(update_provider(text, "test", Some(json!({})), false).is_err());
-        }
+#[allow(dead_code)] // MCP 支持已移除，这些写盘助手目前只被测试引用
+fn sync_mcp_files_and_commit<T>(
+    paths: &[PathBuf],
+    id: &str,
+    spec: Option<&Value>,
+    commit: impl FnOnce() -> Result<T, AppError>,
+) -> Result<T, AppError> {
+    let paths: Vec<_> = if spec.is_none() {
+        paths.iter().filter(|path| path.exists()).cloned().collect()
+    } else {
+        paths.to_vec()
+    };
+    if paths.is_empty() {
+        return commit();
     }
+    if let Some(spec) = spec {
+        validate_mcp_spec(id, spec)?;
+    }
+    edit_files_and_commit(
+        &paths,
+        |texts| {
+            let authoritative = authoritative_index(&paths);
+            let source = ensure_mcp_copies_agree(&paths, authoritative, texts, id)?;
+            texts
+                .iter()
+                .map(|text| mcp_edit_with_source(text, id, spec, source.as_ref()))
+                .collect()
+        },
+        commit,
+    )
+}
 
-    #[test]
-    fn profile_write_holds_native_lock_and_rolls_back_database_failure() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("cordis.patch.yml");
-        fs::write(&path, "# keep\n[]\n").unwrap();
-        let result: Result<(), AppError> = edit_path_and_commit(
-            &path,
-            |_| Ok("- id: test\n".into()),
-            || {
-                assert!(path.with_extension("yml.lock").exists());
-                Err(AppError::Database("injected failure".into()))
-            },
-        );
-        assert!(result.is_err());
-        assert_eq!(read_text(&path).unwrap(), "# keep\n[]\n");
-        let guard = FileLock::acquire(&path).unwrap();
-        assert!(edit_path_and_commit(&path, |_| Ok(String::new()), || Ok(())).is_err());
-        drop(guard);
-        assert!(!path.with_extension("yml.lock").exists());
-    }
+#[allow(dead_code)] // MCP 支持已移除，这些写盘助手目前只被测试引用
+fn mcp_entries_from(text: &str) -> Result<Vec<Yaml>, AppError> {
+    Ok(plugin_entries(&entries(text)?)
+        .filter(|(_, _, entry)| entry["name"].as_str() == Some("@deepseek-ai/dsh-mcp-client"))
+        .map(|(_, _, entry)| entry.clone())
+        .collect())
+}
 
-    /// Points `DSH_HOME` at a temporary directory for one test and restores it afterwards.
-    struct DshHome {
-        dir: tempfile::TempDir,
-        previous: Option<std::ffi::OsString>,
-    }
-    impl DshHome {
-        fn new() -> Self {
-            let dir = tempfile::tempdir().unwrap();
-            let previous = std::env::var_os("DSH_HOME");
-            std::env::set_var("DSH_HOME", dir.path());
-            Self { dir, previous }
-        }
-    }
-    impl Drop for DshHome {
-        fn drop(&mut self) {
-            match self.previous.take() {
-                Some(value) => std::env::set_var("DSH_HOME", value),
-                None => std::env::remove_var("DSH_HOME"),
+/// Compare existing copies, preferring the displayed profile when it has one. A missing copy
+/// is expected when a profile was initialized later; only differing contents are a conflict.
+#[allow(dead_code)] // MCP 支持已移除，这些写盘助手目前只被测试引用
+fn ensure_mcp_copies_agree(
+    paths: &[PathBuf],
+    authoritative: usize,
+    texts: &[String],
+    id: &str,
+) -> Result<Option<Yaml>, AppError> {
+    let mut source = texts
+        .get(authoritative)
+        .map(|text| existing_mcp_entry(text, id))
+        .transpose()?
+        .flatten()
+        .map(|entry| (authoritative, entry));
+    for (index, text) in texts.iter().enumerate() {
+        let Some(copy) = existing_mcp_entry(text, id)? else {
+            continue;
+        };
+        if let Some((source_index, source)) = &source {
+            if copy != *source {
+                return Err(diverged_mcp_error(
+                    id,
+                    paths.get(index),
+                    paths.get(*source_index),
+                ));
             }
+        } else {
+            source = Some((index, copy));
         }
     }
+    Ok(source.map(|(_, entry)| entry))
+}
 
-    fn init_profiles(home: &Path, names: &[&str]) {
-        for name in names {
-            let path = home.join("profiles").join(name).join("cordis.patch.yml");
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(&path, FACTORY_PROFILE).unwrap();
+/// A missing copy inherits native plugin IDs and extension fields from an existing copy, so
+/// creating it does not manufacture a conflict on the next edit or deletion.
+#[allow(dead_code)] // MCP 支持已移除，这些写盘助手目前只被测试引用
+fn mcp_edit_with_source(
+    text: &str,
+    id: &str,
+    spec: Option<&Value>,
+    source: Option<&Yaml>,
+) -> Result<String, AppError> {
+    if let Some(source) = source.filter(|_| spec.is_some()) {
+        if existing_mcp_entry(text, id)?.is_none() {
+            let seeded = insert_mcp_entry(text, source)?;
+            return mcp_edit(&seeded, id, spec);
         }
     }
+    mcp_edit(text, id, spec)
+}
 
-    fn profile_text(home: &Path, name: &str) -> Option<String> {
-        fs::read_to_string(home.join("profiles").join(name).join("cordis.patch.yml")).ok()
-    }
-
-    /// Makes `link` an alias of the `target` directory. Returns false where the platform refuses
-    /// to create links (Windows without developer mode or elevation), so tests can skip.
-    fn link_dir(link: &Path, target: &Path) -> bool {
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(target, link).is_ok()
-        }
-        #[cfg(windows)]
-        {
-            // A junction needs neither elevation nor developer mode, unlike a directory symlink.
-            std::process::Command::new("cmd")
-                .args(["/C", "mklink", "/J"])
-                .arg(link)
-                .arg(target)
-                .output()
-                .map(|output| output.status.success())
-                .unwrap_or(false)
-        }
-        #[cfg(not(any(unix, windows)))]
-        {
-            let _ = (link, target);
-            false
-        }
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn provider_writes_prepare_web_and_desktop_and_keep_optional_profiles_native_owned() {
-        let home = DshHome::new();
-        let root = home.dir.path();
-        init_profiles(root, &["web", "headless"]);
-        // sdk profiles are for embedding and stay native-owned
-        init_profiles(root, &["sdk"]);
-
-        set_provider("gateway", editor_config()).unwrap();
-        for name in ["web", "desktop", "headless"] {
-            assert!(profile_text(root, name)
-                .unwrap()
-                .contains("apiKeyEnv: CC_SWITCH_DSH_GATEWAY"));
-        }
-        assert_eq!(profile_text(root, "sdk").unwrap(), FACTORY_PROFILE);
-        assert!(root.join("profiles/desktop/cordis.patch.yml").exists());
-        assert!(!root.join("profiles/acp").exists());
-        assert!(provider_key_exists("gateway").unwrap());
-        assert_eq!(
-            get_providers().unwrap()["gateway"]["options"]["apiKey"],
-            "test-value"
-        );
-
-        remove_provider("gateway").unwrap();
-        for name in ["web", "desktop", "headless"] {
-            assert!(!profile_text(root, name).unwrap().contains("gateway"));
-        }
-        assert!(root.join("profiles/desktop/cordis.patch.yml").exists());
-    }
-
-    /// `profiles/desktop` pointing at `profiles/web` is one file, not two: it must be locked and
-    /// written once instead of twice (#9100).
-    #[test]
-    #[serial_test::serial]
-    fn target_paths_dedupes_alias_profiles() {
-        let home = DshHome::new();
-        let root = home.dir.path();
-        init_profiles(root, &["web"]);
-        if !link_dir(&root.join("profiles/desktop"), &root.join("profiles/web")) {
-            return;
-        }
-
-        let paths = target_paths();
-        assert_eq!(paths.len(), 1, "alias profile written twice: {paths:?}");
-        assert_eq!(paths[0], profile_path("web"));
-    }
-
-    /// The end-to-end shape of the bug: with `desktop` aliasing `web`, every provider and MCP
-    /// write used to fail with a concurrency conflict, because the second `create_new` on the
-    /// same `<file>.lock` hit `AlreadyExists`.
-    #[test]
-    #[serial_test::serial]
-    fn provider_and_mcp_writes_succeed_when_desktop_aliases_web() {
-        let home = DshHome::new();
-        let root = home.dir.path();
-        init_profiles(root, &["web"]);
-        if !link_dir(&root.join("profiles/desktop"), &root.join("profiles/web")) {
-            return;
-        }
-
-        set_provider("gateway", editor_config()).unwrap();
-        assert!(get_providers().unwrap().contains_key("gateway"));
-        assert!(provider_key_exists("gateway").unwrap());
-
-        let spec = json!({"command":"node","args":["fetch.js"]});
-        sync_mcp_and_commit("fetch", Some(&spec), || Ok(())).unwrap();
-        assert_eq!(mcp_entries().unwrap().len(), 1);
-
-        // The single file really holds both, written once each.
-        let text = profile_text(root, "web").unwrap();
-        assert_eq!(text.matches("apiKeyEnv: CC_SWITCH_DSH_GATEWAY").count(), 1);
-        assert_eq!(text.matches("serverName: fetch").count(), 1);
-        assert!(!root.join("profiles/web/cordis.patch.yml.lock").exists());
-
-        // Removal goes through the same path list.
-        remove_provider("gateway").unwrap();
-        assert!(!get_providers().unwrap().contains_key("gateway"));
-    }
-
-    /// Deduplication must not merge genuinely separate profiles.
-    #[test]
-    #[serial_test::serial]
-    fn target_paths_keeps_independent_profiles_apart() {
-        let home = DshHome::new();
-        let root = home.dir.path();
-        init_profiles(root, &["web", "desktop", "headless"]);
-        let paths = target_paths();
-        assert_eq!(paths.len(), 3, "{paths:?}");
-        assert_eq!(paths[0], profile_path("web"));
-        assert_eq!(paths[1], profile_path("desktop"));
-        assert_eq!(paths[2], profile_path("headless"));
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn display_source_prefers_web_then_desktop() {
-        let home = DshHome::new();
-        let root = home.dir.path();
-        assert_eq!(config_path(), root.join("profiles/web/cordis.patch.yml"));
-        init_profiles(root, &["headless"]);
-        assert_eq!(
-            config_path(),
-            root.join("profiles/headless/cordis.patch.yml")
-        );
-        init_profiles(root, &["desktop"]);
-        assert_eq!(
-            config_path(),
-            root.join("profiles/desktop/cordis.patch.yml")
-        );
-        init_profiles(root, &["web"]);
-        assert_eq!(config_path(), root.join("profiles/web/cordis.patch.yml"));
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn newly_initialized_desktop_imports_managed_configuration_only_once() {
-        use crate::app_config::{AppType, McpApps, McpServer};
-        use crate::provider::{Provider, ProviderMeta};
-        use crate::services::provider::{initialize_dsh_profiles, ProviderService};
-
-        let home = DshHome::new();
-        let root = home.dir.path();
-        init_profiles(root, &["web"]);
-        let web = profile_path("web");
-        // Existing users only had Web when these rows were written.
-        save_paths_and_commit(
-            &[web.clone()],
-            &credentials_path(),
-            "gateway",
-            Some(editor_config()),
-            true,
-            || Ok(()),
-        )
-        .unwrap();
-        let spec = json!({"command":"node","args":["fetch.js"]});
-        sync_mcp_file_and_commit(&web, "fetch", Some(&spec), || Ok(())).unwrap();
-        let before_web = read_text(&web)
-            .unwrap()
-            .replace("command: node", "command: native-node");
-        fs::write(&web, &before_web).unwrap();
-        let native_credentials = read_text(&credentials_path())
-            .unwrap()
-            .replace("test-value", "native-key");
-        fs::write(credentials_path(), native_credentials).unwrap();
-        let before_credentials = fs::read(credentials_path()).unwrap();
-        let state = crate::store::AppState::new(std::sync::Arc::new(
-            crate::database::Database::memory().unwrap(),
-        ));
-        for (id, managed) in [("gateway", true), ("parked", false)] {
-            let mut provider = Provider::with_id(id.into(), id.into(), editor_config(), None);
-            provider.meta = Some(ProviderMeta {
-                live_config_managed: Some(managed),
-                ..Default::default()
-            });
-            state.db.save_provider("dsh", &provider).unwrap();
-        }
-        for (id, enabled) in [("fetch", true), ("disabled", false)] {
-            state
-                .db
-                .save_mcp_server(&McpServer {
-                    id: id.into(),
-                    name: id.into(),
-                    server: spec.clone(),
-                    apps: McpApps {
-                        dsh: enabled,
-                        ..Default::default()
-                    },
-                    description: None,
-                    homepage: None,
-                    docs: None,
-                    tags: vec![],
-                })
-                .unwrap();
-        }
-        // First Desktop launch happens after the managed Web setup.
-        init_profiles(root, &["desktop"]);
-        let desktop = profile_path("desktop");
-        let native = "- id: native-plugin\n  config: {value: !!js process.env.VALUE}\n";
-        fs::write(&desktop, native).unwrap();
-        let listed = ProviderService::list(&state, AppType::Dsh).unwrap();
-        assert!(listed.contains_key("gateway"));
-        let providers = get_providers_from(&desktop, &credentials_path()).unwrap();
-        assert!(providers.contains_key("gateway"));
-        assert_eq!(providers["gateway"]["options"]["apiKey"], "native-key");
-        assert!(!providers.contains_key("parked"));
-        let text = read_text(&desktop).unwrap();
-        assert!(text.starts_with(native));
-        assert_eq!(
-            mcp_entries_from(&text).unwrap(),
-            mcp_entries_from(&before_web).unwrap()
-        );
-        assert!(text.contains("native-node"));
-        assert_eq!(read_text(&web).unwrap(), before_web);
-        assert_eq!(fs::read(credentials_path()).unwrap(), before_credentials);
-
-        // Even deleting every managed node natively must survive startup and page refresh.
-        fs::write(&desktop, native).unwrap();
-        initialize_dsh_profiles(&state).unwrap();
-        ProviderService::list(&state, AppType::Dsh).unwrap();
-        assert_eq!(read_text(&desktop).unwrap(), native);
-
-        // Optional profiles that appear later receive the same one-time initialization.
-        init_profiles(root, &["headless"]);
-        initialize_dsh_profiles(&state).unwrap();
-        assert!(
-            get_providers_from(&profile_path("headless"), &credentials_path())
-                .unwrap()
-                .contains_key("gateway")
-        );
-        assert_eq!(read_text(&desktop).unwrap(), native);
-        assert!(!profile_path("acp").exists());
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn profile_initialization_rolls_back_its_receipt_and_can_retry() {
-        let _home = DshHome::new();
-        let providers = IndexMap::from([("gateway".into(), editor_config())]);
-        let servers = IndexMap::from([("fetch".into(), json!({"command":"node"}))]);
-        let receipt = data_dir().join(".cc-switch-profile-sync.json");
-        let result = initialize_profiles_and_commit(&providers, &servers, || {
-            Err::<(), _>(AppError::Database("injected".into()))
-        });
-        assert!(result.is_err());
-        assert!(!receipt.exists());
-        assert!(!credentials_path().exists());
-        for name in ["web", "desktop"] {
-            assert!(!profile_path(name).exists());
-        }
-        initialize_profiles(&providers, &servers).unwrap();
-        for name in ["web", "desktop"] {
-            assert!(get_providers_from(&profile_path(name), &credentials_path())
-                .unwrap()
-                .contains_key("gateway"));
-            assert_eq!(
-                mcp_entries_from(&read_text(&profile_path(name)).unwrap())
-                    .unwrap()
-                    .len(),
-                1
-            );
-        }
-        let _guard = FileLock::acquire(&profile_path("desktop")).unwrap();
-        // A completed import needs no native writes or locks on subsequent startup.
-        initialize_profiles(&providers, &servers).unwrap();
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn profile_initialization_is_not_blocked_by_a_home_level_provider_config() {
-        let home = DshHome::new();
-        let root = home.dir.path();
-        fs::write(
-            root.join("cordis.patch.yml"),
-            "- id: llm-pi-ai\n  config:\n    providers: {}\n",
-        )
-        .unwrap();
-        let providers = IndexMap::from([("gateway".into(), editor_config())]);
-        initialize_profiles(&providers, &IndexMap::new()).unwrap();
-        assert!(data_dir().join(".cc-switch-profile-sync.json").exists());
-        for name in ["web", "desktop"] {
-            assert!(get_providers_from(&profile_path(name), &credentials_path())
-                .unwrap()
-                .contains_key("gateway"));
-        }
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn multi_profile_provider_write_rolls_back_every_file() {
-        let home = DshHome::new();
-        let root = home.dir.path();
-        init_profiles(root, &["web", "desktop"]);
-        let credentials = root.join(".credentials.yaml");
-        fs::write(&credentials, "version: 1\nrefs:\n  OTHER: kept\n").unwrap();
-        let before = |name| profile_text(root, name).unwrap();
-        let (web, desktop) = (before("web"), before("desktop"));
-
-        // A failed database commit restores both profiles and the credentials.
-        let failed: Result<(), AppError> =
-            save_and_commit("gateway", Some(editor_config()), true, || {
-                Err(AppError::Database("injected failure".into()))
-            });
-        assert!(failed.is_err());
-        assert_eq!(profile_text(root, "web").unwrap(), web);
-        assert_eq!(profile_text(root, "desktop").unwrap(), desktop);
-        assert_eq!(
-            fs::read_to_string(&credentials).unwrap(),
-            "version: 1\nrefs:\n  OTHER: kept\n"
-        );
-
-        // An edit one profile refuses writes nothing anywhere.
-        let tagged = "- id: llm-pi-ai\n  config:\n    providers:\n      native: !!js \"x\"\n";
-        fs::write(root.join("profiles/desktop/cordis.patch.yml"), tagged).unwrap();
-        assert!(set_provider("gateway", editor_config()).is_err());
-        assert_eq!(profile_text(root, "web").unwrap(), web);
-        assert_eq!(profile_text(root, "desktop").unwrap(), tagged);
-        assert!(!fs::read_to_string(&credentials)
-            .unwrap()
-            .contains("CC_SWITCH_DSH_GATEWAY"));
-        assert!(!root.join("profiles/web/cordis.patch.yml.lock").exists());
-        assert!(!root.join(".credentials.yaml.lock").exists());
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn home_patch_llm_pi_ai_config_blocks_provider_writes() {
-        let home = DshHome::new();
-        let root = home.dir.path();
-        init_profiles(root, &["web"]);
-        fs::write(
-            root.join("cordis.patch.yml"),
-            "- id: other\n  config: {}\n- id: llm-pi-ai\n  disabled: false\n",
-        )
-        .unwrap();
-        set_provider("gateway", editor_config()).unwrap();
-        let written = profile_text(root, "web").unwrap();
-
-        fs::write(
-            root.join("cordis.patch.yml"),
-            "- id: llm-pi-ai\n  config:\n    providers: {}\n",
-        )
-        .unwrap();
-        let error = set_provider("gateway", editor_config()).unwrap_err();
-        assert!(error.to_string().contains("cordis.patch.yml"), "{error}");
-        assert_eq!(profile_text(root, "web").unwrap(), written);
-        remove_provider("gateway").unwrap();
-        assert!(get_providers().unwrap().is_empty());
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn mcp_is_written_to_every_initialized_profile_and_rolls_back_together() {
-        let home = DshHome::new();
-        let root = home.dir.path();
-        init_profiles(root, &["web", "acp"]);
-        let spec = json!({"type":"stdio","command":"node","args":["server.js"]});
-
-        sync_mcp_and_commit("memory", Some(&spec), || Ok(())).unwrap();
-        for name in ["web", "desktop", "acp"] {
-            assert_eq!(
-                mcp_entries_from(&profile_text(root, name).unwrap())
-                    .unwrap()
-                    .len(),
-                1
-            );
-        }
-        assert!(root.join("profiles/desktop/cordis.patch.yml").exists());
-        assert_eq!(mcp_entries().unwrap().len(), 1);
-
-        let (web, acp) = (
-            profile_text(root, "web").unwrap(),
-            profile_text(root, "acp").unwrap(),
-        );
-        let failed: Result<(), AppError> = sync_mcp_and_commit("memory", None, || {
-            Err(AppError::Database("injected failure".into()))
-        });
-        assert!(failed.is_err());
-        assert_eq!(profile_text(root, "web").unwrap(), web);
-        assert_eq!(profile_text(root, "acp").unwrap(), acp);
-
-        sync_mcp_and_commit("memory", None, || Ok(())).unwrap();
-        assert!(mcp_entries().unwrap().is_empty());
-    }
-
-    /// 用户在 DSH 原生界面里加的一条供应商：只写进 headless 的 profile。
-    const NATIVE_HEADLESS_PROVIDER: &str = "---\n- id: llm-pi-ai\n  config:\n    providers:\n      native-headless:\n        displayName: Native Headless Route\n        api: openai-completions\n        baseURL: https://native-headless.example/v1\n        apiKeyEnv: NATIVE_HEADLESS_KEY\n        models:\n          - id: native-model\n            contextWindow: 128000\n";
-
-    /// 只写进某个 profile 的供应商也要出现在列表里：否则列表看不到它、`provider_key_exists`
-    /// 又把它算成已占用，用户既加不进去也找不到，无法自救。
-    #[test]
-    #[serial_test::serial]
-    fn providers_that_only_exist_in_another_profile_are_listed() {
-        let home = DshHome::new();
-        let root = home.dir.path();
-        init_profiles(root, &["web", "headless"]);
-        fs::write(
-            root.join("profiles/headless/cordis.patch.yml"),
-            NATIVE_HEADLESS_PROVIDER,
-        )
-        .unwrap();
-
-        let listed = get_providers().unwrap();
-        assert!(
-            listed.contains_key("native-headless"),
-            "headless 里的供应商应当出现在列表里: {:?}",
-            listed.keys().collect::<Vec<_>>()
-        );
-        // 列表与 key 占用检查给出同一个结论
-        assert!(provider_key_exists("native-headless").unwrap());
-        assert_eq!(
-            listed["native-headless"]["options"]["baseURL"],
-            "https://native-headless.example/v1"
-        );
-
-        // 权威 profile（web）里的供应商仍然优先显示
-        set_provider("gateway", editor_config()).unwrap();
-        let listed = get_providers().unwrap();
-        assert!(listed.contains_key("gateway") && listed.contains_key("native-headless"));
-        assert_eq!(
-            listed["gateway"]["options"]["baseURL"],
-            "https://gateway.example/v1"
-        );
-    }
-
-    /// 同名节点在别的 profile 里被原生改过时，改写会把那份修改静默抹掉：宁可拒绝并指名。
-    #[test]
-    #[serial_test::serial]
-    fn editing_a_provider_is_refused_when_another_profile_differs() {
-        let home = DshHome::new();
-        let root = home.dir.path();
-        init_profiles(root, &["web", "desktop"]);
-        set_provider("gateway", editor_config()).unwrap();
-
-        // 用户在 DSH Desktop 原生界面里把这个 key 的 endpoint 改成了别处
-        let desktop_path = root.join("profiles/desktop/cordis.patch.yml");
-        let edited = profile_text(root, "desktop")
-            .unwrap()
-            .replace("https://gateway.example/v1", "https://desktop.example/v1");
-        fs::write(&desktop_path, &edited).unwrap();
-        let web_before = profile_text(root, "web").unwrap();
-
-        let mut renamed = editor_config();
-        renamed["name"] = json!("Renamed");
-        let error = set_provider("gateway", renamed).unwrap_err();
-        let message = error.to_string();
-        assert!(message.contains("desktop"), "{message}");
-        assert!(message.contains("gateway"), "{message}");
-        // 一个字节都没写
-        assert_eq!(profile_text(root, "desktop").unwrap(), edited);
-        assert_eq!(profile_text(root, "web").unwrap(), web_before);
-        assert!(!root.join("profiles/web/cordis.patch.yml.lock").exists());
-
-        // 删除同理：不能把 diverged 的那份一起删掉
-        let error = remove_provider("gateway").unwrap_err();
-        assert!(error.to_string().contains("desktop"));
-        assert_eq!(profile_text(root, "desktop").unwrap(), edited);
-
-        // 把两边改回一致后照常可写
-        fs::write(&desktop_path, &web_before).unwrap();
-        set_provider("gateway", editor_config()).unwrap();
-    }
-
-    /// 添加时若 key 已被别的 profile 占用，报错要指名是哪个 profile。
-    #[test]
-    #[serial_test::serial]
-    fn adding_a_key_that_another_profile_uses_names_that_profile() {
-        let home = DshHome::new();
-        let root = home.dir.path();
-        init_profiles(root, &["web", "headless"]);
-        fs::write(
-            root.join("profiles/headless/cordis.patch.yml"),
-            NATIVE_HEADLESS_PROVIDER,
-        )
-        .unwrap();
-        let before = profile_text(root, "headless").unwrap();
-
-        let mut config = editor_config();
-        config["name"] = json!("Native Headless");
-        let error = save_and_commit("native-headless", Some(config), true, || Ok(())).unwrap_err();
-        let message = error.to_string();
-        assert!(message.contains("headless"), "{message}");
-        assert_eq!(profile_text(root, "headless").unwrap(), before);
-    }
-
-    /// MCP 同款：别的 profile 里的同名服务器内容不同就拒绝改写。
-    #[test]
-    #[serial_test::serial]
-    fn mcp_edit_is_refused_when_another_profile_differs() {
-        let home = DshHome::new();
-        let root = home.dir.path();
-        init_profiles(root, &["web", "desktop"]);
-        let spec = json!({"type":"stdio","command":"node","args":["server.js"]});
-        sync_mcp_and_commit("memory", Some(&spec), || Ok(())).unwrap();
-
-        let desktop_path = root.join("profiles/desktop/cordis.patch.yml");
-        let edited = profile_text(root, "desktop")
-            .unwrap()
-            .replace("command: node", "command: python3");
-        fs::write(&desktop_path, &edited).unwrap();
-
-        let error = sync_mcp_and_commit("memory", Some(&spec), || Ok(())).unwrap_err();
-        let message = error.to_string();
-        assert!(message.contains("desktop"), "{message}");
-        assert_eq!(profile_text(root, "desktop").unwrap(), edited);
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn mcp_missing_from_web_can_be_edited_and_removed() {
-        let home = DshHome::new();
-        let root = home.dir.path();
-        init_profiles(root, &["desktop"]);
-        let desktop = profile_path("desktop");
-        fs::write(&desktop, "- insert:\n  - id: native-fetch\n    name: '@deepseek-ai/dsh-mcp-client'\n    config: {serverName: fetch, transport: stdio, command: node, args: [old.js], toolCallTimeoutMs: 12345}\n").unwrap();
-        init_profiles(root, &["web"]);
-
-        let updated = json!({"command":"node","args":["new.js"]});
-        sync_mcp_and_commit("fetch", Some(&updated), || Ok(())).unwrap();
-        for name in ["web", "desktop"] {
-            let text = profile_text(root, name).unwrap();
-            assert!(text.contains("new.js"));
-            assert!(text.contains("native-fetch"));
-            assert!(text.contains("toolCallTimeoutMs: 12345"));
-        }
-        // Exercise deletion in the same missing-copy window, before first-import runs.
-        init_profiles(root, &["web"]);
-        sync_mcp_and_commit("fetch", None, || Ok(())).unwrap();
-        assert!(mcp_entries().unwrap().is_empty());
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn mcp_missing_from_web_still_rejects_divergent_existing_copies() {
-        let home = DshHome::new();
-        let root = home.dir.path();
-        init_profiles(root, &["web", "desktop", "headless"]);
-        for (name, command) in [("desktop", "node"), ("headless", "python")] {
-            sync_mcp_file_and_commit(
-                &profile_path(name),
-                "fetch",
-                Some(&json!({"command":command})),
-                || Ok(()),
-            )
-            .unwrap();
-        }
-        let before = profile_text(root, "desktop");
-        for spec in [Some(json!({"command":"npx"})), None] {
-            let error = sync_mcp_and_commit("fetch", spec.as_ref(), || Ok(())).unwrap_err();
-            assert!(error.to_string().contains("headless"));
-            assert_eq!(profile_text(root, "desktop"), before);
-            assert_eq!(profile_text(root, "web").unwrap(), FACTORY_PROFILE);
-        }
-    }
-
-    /// 崩溃留下的 `<file>.lock` 不该把之后的写入永久卡死，但活着的写入方仍然要被尊重。
-    #[test]
-    #[serial_test::serial]
-    fn a_stale_lock_file_does_not_block_writes() {
-        let home = DshHome::new();
-        let root = home.dir.path();
-        init_profiles(root, &["web"]);
-
-        // 主人已经不在了：接管
-        let stale = root.join("profiles/web/cordis.patch.yml.lock");
-        fs::write(&stale, "4194303\n").unwrap();
-        set_provider("gateway", editor_config()).unwrap();
-        assert!(!stale.exists(), "残留锁应当被清掉");
-
-        // 主人就是自己：仍然当冲突处理
-        fs::write(&stale, format!("{}\n", std::process::id())).unwrap();
-        let error = set_provider("other", editor_config()).unwrap_err();
-        assert!(
-            error.to_string().contains("saving its configuration"),
-            "{error}"
-        );
-        fs::remove_file(&stale).unwrap();
-        set_provider("other", editor_config()).unwrap();
-    }
-
-    #[test]
-    fn removing_an_entry_refuses_to_strand_an_alias() {
-        let text = "- id: a\n  config: &shared\n    x: 1\n- id: b\n  config: *shared\n";
-        assert!(replace_entry(text, "a", None).is_err());
-        assert!(replace_entry(text, "b", None).is_ok());
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn shared_account_grant_is_read_and_removed_without_touching_api_keys() {
-        let home = DshHome::new();
-        assert_eq!(account_grant().unwrap(), None);
-        let credentials = home.dir.path().join(".credentials.yaml");
-        fs::write(
-            &credentials,
-            concat!(
-                "version: 1\n",
-                "refs:\n",
-                "  DEEPSEEK_API_KEY: sk-test\n",
-                "records:\n",
-                "  deepseek-account-platform/default:\n",
-                "    kind: grant\n",
-                "    payload: {version: 1, token: tok, issuer: 'https://platform.deepseek.com'}\n",
-                "  deepseek-account-platform/device:\n",
-                "    kind: grant\n",
-                "    payload: {id: 00000000-0000-4000-8000-000000000000}\n",
-            ),
-        )
-        .unwrap();
-        assert_eq!(
-            account_grant().unwrap(),
-            Some(("tok".into(), "https://platform.deepseek.com".into()))
-        );
-
-        assert_eq!(
-            remove_account_grant().unwrap(),
-            Some(("tok".into(), "https://platform.deepseek.com".into()))
-        );
-        assert_eq!(account_grant().unwrap(), None);
-        let document: Yaml =
-            serde_yaml::from_str(&fs::read_to_string(&credentials).unwrap()).unwrap();
-        assert_eq!(document["refs"]["DEEPSEEK_API_KEY"], Yaml::from("sk-test"));
-        assert!(!document["records"]["deepseek-account-platform/device"].is_null());
-        assert_eq!(remove_account_grant().unwrap(), None);
-    }
+#[allow(dead_code)] // MCP 支持已移除，这些写盘助手目前只被测试引用
+fn diverged_mcp_error(id: &str, other: Option<&PathBuf>, source: Option<&PathBuf>) -> AppError {
+    let other = other.map(|path| profile_name(path)).unwrap_or_default();
+    let source = source.map(|path| profile_name(path)).unwrap_or_default();
+    AppError::localized(
+        "dsh.mcp_diverged",
+        format!(
+            "MCP 服务器 '{id}' 在 profile '{other}' 里的配置与 '{source}' 不同；改写会覆盖你在 DeepSeek Harness 里对 '{other}' 做的修改。请先在 DeepSeek Harness 里把两者改成一致，或手动编辑 profiles/{other}/cordis.patch.yml。"
+        ),
+        format!(
+            "MCP server '{id}' differs between the '{other}' and '{source}' profiles; writing would discard your changes in '{other}'. Make them identical in DeepSeek Harness, or edit profiles/{other}/cordis.patch.yml directly."
+        ),
+    )
 }

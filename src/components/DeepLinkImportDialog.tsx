@@ -20,8 +20,6 @@ import { toast } from "@/lib/toast";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { PromptConfirmation } from "./deeplink/PromptConfirmation";
-import { McpConfirmation } from "./deeplink/McpConfirmation";
-import { SkillConfirmation } from "./deeplink/SkillConfirmation";
 import { ProviderIcon } from "./ProviderIcon";
 import {
   classifyEndpoint,
@@ -114,24 +112,6 @@ export function DeepLinkImportDialog() {
       stale = true;
     };
   }, [request]);
-
-  // 容错判断：MCP 导入结果可能缺少 type 字段
-  const isMcpImportResult = (
-    value: unknown,
-  ): value is {
-    importedCount: number;
-    importedIds: string[];
-    failed: Array<{ id: string; error: string }>;
-    type?: "mcp";
-  } => {
-    if (!value || typeof value !== "object") return false;
-    const v = value as Record<string, unknown>;
-    return (
-      typeof v.importedCount === "number" &&
-      Array.isArray(v.importedIds) &&
-      Array.isArray(v.failed)
-    );
-  };
 
   // effect 只随挂载/卸载运行，不能依赖 t：启动时校正语言会换掉 t，effect 一重建，
   // 正在处理的链接就被丢下。翻译函数从 ref 读最新值。
@@ -262,38 +242,6 @@ export function DeepLinkImportDialog() {
         };
       }
       const result = await deeplinkApi.importFromDeeplink(payload);
-      const refreshMcp = async (summary: {
-        importedCount: number;
-        importedIds: string[];
-        failed: Array<{ id: string; error: string }>;
-      }) => {
-        // 强制刷新 MCP 相关缓存，确保管理页重新从数据库加载
-        await queryClient.invalidateQueries({
-          queryKey: ["mcp", "all"],
-          refetchType: "all",
-        });
-        await queryClient.refetchQueries({
-          queryKey: ["mcp", "all"],
-          type: "all",
-        });
-
-        if (summary.failed.length > 0) {
-          toast.warning(t("deeplink.mcpPartialSuccess"), {
-            description: t("deeplink.mcpPartialSuccessDescription", {
-              success: summary.importedCount,
-              failed: summary.failed.length,
-            }),
-          });
-        } else {
-          toast.success(t("deeplink.mcpImportSuccess"), {
-            description: t("deeplink.mcpImportSuccessDescription", {
-              count: summary.importedCount,
-            }),
-            closeButton: true,
-          });
-        }
-      };
-
       // Handle different result types
       if ("type" in result) {
         if (result.type === "provider") {
@@ -328,28 +276,7 @@ export function DeepLinkImportDialog() {
             }),
             closeButton: true,
           });
-        } else if (result.type === "mcp") {
-          await refreshMcp(result);
-        } else if (result.type === "skill") {
-          // Refresh Skills with aggressive strategy
-          queryClient.invalidateQueries({
-            queryKey: ["skills"],
-            refetchType: "all",
-          });
-          await queryClient.refetchQueries({
-            queryKey: ["skills"],
-            type: "all",
-          });
-          toast.success(t("deeplink.skillImportSuccess"), {
-            description: t("deeplink.skillImportSuccessDescription", {
-              repo: request.repo,
-            }),
-            closeButton: true,
-          });
         }
-      } else if (isMcpImportResult(result)) {
-        // 兜底处理：旧版本后端可能未返回 type 字段
-        await refreshMcp(result);
       } else {
         // Legacy return type (string ID) - assume provider
         await queryClient.invalidateQueries({
@@ -445,10 +372,6 @@ export function DeepLinkImportDialog() {
     switch (request.resource) {
       case "prompt":
         return t("deeplink.importPrompt");
-      case "mcp":
-        return t("deeplink.importMcp");
-      case "skill":
-        return t("deeplink.importSkill");
       default:
         return t("deeplink.confirmImport");
     }
@@ -459,10 +382,6 @@ export function DeepLinkImportDialog() {
     switch (request.resource) {
       case "prompt":
         return t("deeplink.importPromptDescription");
-      case "mcp":
-        return t("deeplink.importMcpDescription");
-      case "skill":
-        return t("deeplink.importSkillDescription");
       default:
         return t("deeplink.confirmImportDescription");
     }
@@ -487,12 +406,6 @@ export function DeepLinkImportDialog() {
                   enableAfterImport={activateAfterImport}
                   onEnableAfterImportChange={setActivateAfterImport}
                 />
-              )}
-              {request.resource === "mcp" && (
-                <McpConfirmation request={request} />
-              )}
-              {request.resource === "skill" && (
-                <SkillConfirmation request={request} />
               )}
 
               {/* Legacy Provider View */}

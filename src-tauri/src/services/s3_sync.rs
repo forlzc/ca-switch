@@ -17,7 +17,7 @@ use super::sync_protocol::{
     apply_snapshot, build_local_snapshot, localized, persist_sync_success_best_effort, sha256_hex,
     validate_artifact_size_limit, validate_manifest_compat, verify_artifact, ArtifactMeta,
     RemoteLayout, SyncManifest, DB_COMPAT_VERSION, MAX_MANIFEST_BYTES, MAX_SYNC_ARTIFACT_BYTES,
-    PROTOCOL_VERSION, REMOTE_DB_SQL, REMOTE_MANIFEST, REMOTE_SKILLS_ZIP,
+    PROTOCOL_VERSION, REMOTE_DB_SQL, REMOTE_MANIFEST,
 };
 
 #[cfg(test)]
@@ -47,9 +47,6 @@ pub async fn upload(
     // Upload order: artifacts first, manifest last (best-effort consistency)
     let db_key = s3_key(settings, REMOTE_DB_SQL);
     s3::put_object(&creds, &db_key, snapshot.db_sql, "application/sql").await?;
-
-    let skills_key = s3_key(settings, REMOTE_SKILLS_ZIP);
-    s3::put_object(&creds, &skills_key, snapshot.skills_zip, "application/zip").await?;
 
     let manifest_key = s3_key(settings, REMOTE_MANIFEST);
     s3::put_object(
@@ -107,11 +104,8 @@ pub async fn download(
 
     // Download and verify artifacts
     let db_sql = download_and_verify(settings, &creds, REMOTE_DB_SQL, &manifest.artifacts).await?;
-    let skills_zip =
-        download_and_verify(settings, &creds, REMOTE_SKILLS_ZIP, &manifest.artifacts).await?;
-
     // Apply snapshot
-    apply_snapshot(db, &db_sql, &skills_zip)?;
+    apply_snapshot(db, &db_sql)?;
 
     let manifest_hash = sha256_hex(&manifest_bytes);
     let _persisted =

@@ -3,13 +3,12 @@ use std::path::{Path, PathBuf};
 
 use cc_switch_lib::{
     get_codex_auth_path, get_codex_config_path, import_default_config_test_hook, read_json_file,
-    switch_provider_test_hook, write_codex_live_atomic, AppError, AppType, McpApps, McpServer,
-    MultiAppConfig, Provider, ProviderService,
+    switch_provider_test_hook, write_codex_live_atomic, AppError, AppType, MultiAppConfig,
+    Provider, ProviderService,
 };
 
 #[path = "support.rs"]
 mod support;
-use std::collections::HashMap;
 use support::{
     create_test_state, create_test_state_with_config, enable_codex_official_auth_preservation,
     ensure_test_home, reset_test_fs, test_mutex,
@@ -523,38 +522,6 @@ command = "say"
             ),
         );
     }
-
-    // v3.7.0+: 使用统一的 MCP 结构
-    config.mcp.servers = Some(HashMap::new());
-    config.mcp.servers.as_mut().unwrap().insert(
-        "echo-server".into(),
-        McpServer {
-            id: "echo-server".to_string(),
-            name: "Echo Server".to_string(),
-            server: json!({
-                "type": "stdio",
-                "command": "echo"
-            }),
-            apps: McpApps {
-                agy: false,
-                claude: false,
-                codex: true, // 启用 Codex
-                gemini: false,
-                grokbuild: false,
-                opencode: false,
-                hermes: false,
-                mcode: false,
-                kimi: false,
-                dsh: false,
-                pi: false,
-                omp: false,
-            },
-            description: None,
-            homepage: None,
-            docs: None,
-            tags: Vec::new(),
-        },
-    );
 
     let app_state = create_test_state_with_config(&config).expect("create test state");
 

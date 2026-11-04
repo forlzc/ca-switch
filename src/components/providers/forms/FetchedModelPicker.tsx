@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { HoverTip } from "@/components/ui/hover-tip";
 import { SearchField } from "@/components/ui/search-field";
-import { CHECKBOX_CLASS, V7Dialog } from "@/components/mcp/formBits";
+import { CHECKBOX_CLASS, V7Dialog } from "@/components/common/formBits";
 import type { FetchedModel } from "@/lib/api/model-fetch";
 import {
   resolveModelMetadata,

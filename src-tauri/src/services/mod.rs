@@ -11,8 +11,6 @@ pub mod env_checker;
 pub mod env_manager;
 pub mod exchange_rates;
 pub mod kimi_oauth;
-pub mod mcp;
-pub mod mcp_connectivity;
 pub mod model_fetch;
 pub mod model_pricing;
 pub mod omo;
@@ -32,7 +30,6 @@ pub mod session_usage_grokbuild;
 pub mod session_usage_omp;
 pub mod session_usage_opencode;
 pub mod session_usage_pi;
-pub mod skill;
 pub mod speedtest;
 pub mod sql_helpers;
 pub mod stream_check;
@@ -47,13 +44,11 @@ pub mod webdav_auto_sync;
 pub mod webdav_sync;
 
 pub use config::ConfigService;
-pub use mcp::McpService;
 pub use omo::OmoService;
 pub use prompt::PromptService;
 pub use provider::{ProviderService, ProviderSortUpdate, SwitchResult};
 pub use proxy::ProxyService;
 #[allow(unused_imports)]
-pub use skill::{DiscoverableSkill, Skill, SkillRepo, SkillService};
 pub use speedtest::{EndpointLatency, SpeedtestService};
 pub use usage_cache::UsageCache;
 #[allow(unused_imports)]

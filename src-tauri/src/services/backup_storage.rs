@@ -250,7 +250,6 @@ pub fn delete_location(id: &str) -> Result<u64, AppError> {
     let _codex_guard = id
         .starts_with("codex")
         .then(codex_history_migration::lock_history_op_for_backup_cleanup);
-    let _skill_guard = (id == "skills").then(crate::services::skill::skill_state_write_guard);
 
     let freed = measure(&category).size;
     match category.scope {

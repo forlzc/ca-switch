@@ -35,7 +35,6 @@ use serde_json::Value;
 use crate::app_config::AppType;
 use crate::error::AppError;
 use crate::provider::{Provider, ProviderMeta, UsageResult};
-use crate::services::mcp::McpService;
 use crate::settings::CustomEndpoint;
 use crate::store::AppState;
 
@@ -6482,16 +6481,7 @@ impl ProviderService {
                 &provider,
                 existing_provider.as_ref(),
             )?;
-            if outcome == LiveSyncOutcome::WroteLive {
-                // MCP is stored in the database and projected after a successful
-                // live write. Keep the failure best-effort so the provider save
-                // itself is not reported as failed when MCP projection can retry.
-                if let Err(err) = McpService::sync_enabled_for_app(state, &app_type) {
-                    log::warn!(
-                        "保存供应商后重投影 {app_type:?} MCP 失败（将在下次同步时自愈）: {err}"
-                    );
-                }
-            }
+            if outcome == LiveSyncOutcome::WroteLive {}
         }
 
         Ok(true)
@@ -7090,16 +7080,6 @@ impl ProviderService {
         }
 
         // 切换重写了目标应用的 live，只重投影该应用的 MCP（Grok Build 的
-        // [mcp_servers] 与 live 同文件，整体替换后必须补回；其余应用的
-        // MCP 文件独立于 live，投影是幂等维护）。不用全量 sync_all_enabled：
-        // 无关应用的 live 损坏（如 ~/.claude.json 坏 JSON）不该阻断切换。
-        // 走到这里 DB is_current 与 live 都已落盘，切换事实上已成功；
-        // 投影失败上抛会让前端报"切换失败"制造分裂假象，故降级为警告
-        // （MCP 投影可自愈：下次切换 / 任一 MCP 启停都会重新投影）。
-        if let Err(err) = McpService::sync_enabled_for_app(state, &app_type) {
-            log::warn!("切换供应商后重投影 {app_type:?} MCP 失败（将在下次同步时自愈）: {err}");
-        }
-
         Ok(result)
     }
 
@@ -7139,12 +7119,6 @@ impl ProviderService {
             .as_deref()
             .and_then(|current_id| providers.get(current_id));
         claude_direct::switch_to(state.db.as_ref(), prev, provider)?;
-
-        // MCP 在 ~/.claude.json，和 settings.json 无关；重投影是幂等维护，失败只记警告
-        // （切换已经提交，下次同步会自愈）。
-        if let Err(err) = McpService::sync_enabled_for_app(state, &AppType::Claude) {
-            log::warn!("切换供应商后重投影 claude MCP 失败（将在下次同步时自愈）: {err}");
-        }
         Ok(SwitchResult::default())
     }
 
@@ -7223,12 +7197,8 @@ impl ProviderService {
         if app_type.is_additive_mode() {
             return sync_additive_app_to_live(state, &app_type);
         }
-        // 没有正在用的那家、或者在代理模式（客户端文件没按直连重写）时不重投影 MCP。
-        let outcome = live::sync_current_provider_for_app_respecting_mode(state, &app_type)?;
-        if outcome != Some(LiveSyncOutcome::WroteLive) {
-            return Ok(());
-        }
-        McpService::sync_enabled_for_app(state, &app_type)
+        live::sync_current_provider_for_app_respecting_mode(state, &app_type)?;
+        Ok(())
     }
 
     pub fn migrate_legacy_common_config_usage(

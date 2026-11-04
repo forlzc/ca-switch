@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type ResourceType = "provider" | "prompt" | "mcp" | "skill";
+export type ResourceType = "provider" | "prompt";
 
 export interface DeepLinkImportRequest {
   version: string;
@@ -43,14 +43,6 @@ export interface DeepLinkImportRequest {
   content?: string;
   description?: string;
 
-  // MCP fields
-  apps?: string; // Comma-separated application IDs
-
-  // Skill fields
-  repo?: string;
-  directory?: string;
-  branch?: string;
-
   // Config file fields
   config?: string;
   configFormat?: string;
@@ -66,25 +58,9 @@ export interface DeepLinkImportRequest {
   usageAutoInterval?: number;
 }
 
-export interface McpImportResult {
-  importedCount: number;
-  importedIds: string[];
-  failed: Array<{
-    id: string;
-    error: string;
-  }>;
-}
-
 export type ImportResult =
   | { type: "provider"; id: string }
-  | { type: "prompt"; id: string }
-  | {
-      type: "mcp";
-      importedCount: number;
-      importedIds: string[];
-      failed: Array<{ id: string; error: string }>;
-    }
-  | { type: "skill"; key: string };
+  | { type: "prompt"; id: string };
 
 /** 后端暂存、等前端处理的深链接（解析结果或解析错误） */
 export type PendingDeepLink =

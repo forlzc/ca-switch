@@ -17,7 +17,6 @@ mod global_proxy;
 mod hermes;
 mod import_export;
 mod kimi_oauth;
-mod mcp;
 mod misc;
 mod model_fetch;
 mod omo;
@@ -31,7 +30,6 @@ mod provider;
 mod proxy;
 mod session_manager;
 mod settings;
-pub mod skill;
 mod stream_check;
 mod subscription;
 mod sync_support;
@@ -65,7 +63,6 @@ pub use global_proxy::*;
 pub use hermes::*;
 pub use import_export::*;
 pub use kimi_oauth::*;
-pub use mcp::*;
 pub use misc::*;
 pub use model_fetch::*;
 pub use omo::*;
@@ -79,7 +76,6 @@ pub use provider::*;
 pub use proxy::*;
 pub use session_manager::*;
 pub use settings::*;
-pub use skill::*;
 pub use stream_check::*;
 pub use subscription::*;
 pub use xai_oauth::*;
@@ -91,4 +87,5 @@ pub use webdav_sync::*;
 pub use workspace::*;
 
 #[cfg(not(target_os = "windows"))]
+#[allow(unused_imports)] // 仅被 `#[cfg(test)]` 下的工具探测用例使用
 pub(crate) use misc::{login_shell_path, merge_path_segments, CommandDeadline};

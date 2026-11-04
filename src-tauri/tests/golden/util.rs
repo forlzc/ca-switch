@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use cc_switch_lib::{AppState, AppType, McpApps, McpServer, Provider, ProviderMeta};
+use cc_switch_lib::{AppState, AppType, Provider, ProviderMeta};
 
 use crate::support::ensure_test_home;
 
@@ -102,23 +102,6 @@ pub fn seed_providers(state: &AppState, app: &AppType, providers: &[Provider], c
         .expect("set current provider");
 }
 
-pub fn mcp_server(id: &str, server: Value, apps: &[AppType]) -> McpServer {
-    let mut enabled = McpApps::default();
-    for app in apps {
-        enabled.set_enabled_for(app, true);
-    }
-    McpServer {
-        id: id.to_string(),
-        name: id.to_string(),
-        server,
-        apps: enabled,
-        description: None,
-        homepage: None,
-        docs: None,
-        tags: Vec::new(),
-    }
-}
-
 /// 读 DB 里某个应用的供应商原始行（列里存的 JSON 文本原样输出）。
 ///
 /// 锁原始文本而不是反序列化后的结构：降级后旧版读的就是这些字节。
@@ -206,7 +189,7 @@ fn open_db_read_only() -> rusqlite::Connection {
 
 /// 从 TOML 文本里截出以 `header_prefix` 开头的那几张连续的表（含表头行）。
 ///
-/// 用来单独比对 `[mcp_servers.*]` 这一段：切换时文件其余部分按设计会变，
+/// 用来单独比对某几张连续的表：切换时文件其余部分按设计会变，
 /// 这一段的字节不应该变。
 pub fn toml_section(text: &str, header_prefix: &str) -> String {
     let mut out = String::new();
@@ -226,10 +209,8 @@ pub fn toml_section(text: &str, header_prefix: &str) -> String {
 
 /// 把 `pointers` 指到的对象按键排序。
 ///
-/// 只用在旧代码输出顺序本身不稳定的地方：MCP 投影按 `HashMap` 遍历写
-/// `mcpServers`（`claude_mcp.rs` / `gemini_mcp.rs` 的 `set_mcp_servers_map`），
-/// Gemini 的 `.env` 解析进 `HashMap` 后再存进 `env`。这几处每次运行顺序都可能不同，
-/// 其余内容仍按原样比对。
+/// 只用在旧代码输出顺序本身不稳定的地方：Gemini 的 `.env` 解析进 `HashMap`
+/// 后再存进 `env`，每次运行顺序都可能不同，其余内容仍按原样比对。
 pub fn sort_objects(value: &mut Value, pointers: &[&str]) {
     for pointer in pointers {
         if let Some(Value::Object(map)) = value.pointer_mut(pointer) {

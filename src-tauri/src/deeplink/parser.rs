@@ -59,8 +59,6 @@ pub fn parse_deeplink_url(url_str: &str) -> Result<DeepLinkImportRequest, AppErr
     match resource.as_str() {
         "provider" => parse_provider_deeplink(&params, version, resource),
         "prompt" => parse_prompt_deeplink(&params, version, resource),
-        "mcp" => parse_mcp_deeplink(&params, version, resource),
-        "skill" => parse_skill_deeplink(&params, version, resource),
         _ => Err(AppError::InvalidInput(format!(
             "Unsupported resource type: {resource}"
         ))),
@@ -214,10 +212,6 @@ fn parse_provider_deeplink(
         api_format,
         content: None,
         description: None,
-        apps: None,
-        repo: None,
-        directory: None,
-        branch: None,
         config,
         config_format,
         config_url,
@@ -305,149 +299,6 @@ fn parse_prompt_deeplink(
         sonnet_model: None,
         opus_model: None,
         api_format: None,
-        apps: None,
-        repo: None,
-        directory: None,
-        branch: None,
-        config: None,
-        config_format: None,
-        config_url: None,
-        icon_url: None,
-        usage_enabled: None,
-        usage_script: None,
-        usage_api_key: None,
-        usage_base_url: None,
-        usage_access_token: None,
-        usage_user_id: None,
-        usage_auto_interval: None,
-    })
-}
-
-/// Parse MCP deep link parameters
-fn parse_mcp_deeplink(
-    params: &HashMap<String, String>,
-    version: String,
-    resource: String,
-) -> Result<DeepLinkImportRequest, AppError> {
-    let apps = params
-        .get("apps")
-        .ok_or_else(|| AppError::InvalidInput("Missing 'apps' parameter for MCP".to_string()))?
-        .clone();
-
-    // Validate apps format. Keep this list in step with `parse_mcp_apps`
-    // (`deeplink/mcp.rs`), which is what actually maps the names onto `McpApps`:
-    // rejecting a name here makes the importer's arm for it unreachable.
-    for app in apps.split(',') {
-        let trimmed = app.trim();
-        if !matches!(
-            trimmed,
-            "claude"
-                | "codex"
-                | "gemini"
-                | "agy"
-                | "grokbuild"
-                | "grok"
-                | "opencode"
-                | "openclaw"
-                | "hermes"
-                | "mcode"
-                | "pi"
-                | "kimi"
-                | "dsh"
-                | "omp"
-        ) {
-            return Err(AppError::InvalidInput(format!(
-                "Invalid app in 'apps': must be 'claude', 'codex', 'gemini', 'agy', 'grokbuild', 'opencode', 'openclaw', 'hermes', 'pi', 'kimi', 'dsh', 'mcode', or 'omp', got '{trimmed}'"
-            )));
-        }
-    }
-
-    let config = params
-        .get("config")
-        .ok_or_else(|| AppError::InvalidInput("Missing 'config' parameter for MCP".to_string()))?
-        .clone();
-
-    let enabled = params.get("enabled").and_then(|v| v.parse::<bool>().ok());
-
-    Ok(DeepLinkImportRequest {
-        version,
-        resource,
-        apps: Some(apps),
-        enabled,
-        config: Some(config),
-        config_format: Some("json".to_string()), // MCP config is always JSON
-        app: None,
-        name: None,
-        icon: None,
-        homepage: None,
-        endpoint: None,
-        api_key: None,
-        model: None,
-        notes: None,
-        haiku_model: None,
-        sonnet_model: None,
-        opus_model: None,
-        api_format: None,
-        content: None,
-        description: None,
-        repo: None,
-        directory: None,
-        branch: None,
-        config_url: None,
-        icon_url: None,
-        usage_enabled: None,
-        usage_script: None,
-        usage_api_key: None,
-        usage_base_url: None,
-        usage_access_token: None,
-        usage_user_id: None,
-        usage_auto_interval: None,
-    })
-}
-
-/// Parse skill deep link parameters
-fn parse_skill_deeplink(
-    params: &HashMap<String, String>,
-    version: String,
-    resource: String,
-) -> Result<DeepLinkImportRequest, AppError> {
-    let repo = params
-        .get("repo")
-        .ok_or_else(|| AppError::InvalidInput("Missing 'repo' parameter for skill".to_string()))?
-        .clone();
-
-    // Validate repo format (should be "owner/name")
-    if !repo.contains('/') || repo.split('/').count() != 2 {
-        return Err(AppError::InvalidInput(format!(
-            "Invalid repo format: expected 'owner/name', got '{repo}'"
-        )));
-    }
-
-    let directory = params.get("directory").cloned();
-    let branch = params.get("branch").cloned();
-
-    Ok(DeepLinkImportRequest {
-        version,
-        resource,
-        repo: Some(repo),
-        directory,
-        branch,
-        icon: None,
-        app: None, // Skill links add a shared repository; app installation is a separate action.
-        name: None,
-        enabled: None,
-        homepage: None,
-        endpoint: None,
-        api_key: None,
-        model: None,
-        notes: None,
-        haiku_model: None,
-        sonnet_model: None,
-        opus_model: None,
-        api_format: None,
-        content: None,
-        description: None,
-        apps: None,
         config: None,
         config_format: None,
         config_url: None,

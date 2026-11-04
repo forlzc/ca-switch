@@ -23,9 +23,6 @@ import { server } from "../msw/server";
 
 const toastSuccessMock = vi.fn();
 const toastErrorMock = vi.fn();
-const skillsPanelMocks = vi.hoisted(() => ({
-  initialViews: [] as string[],
-}));
 const windowMocks = vi.hoisted(() => ({
   isLinux: vi.fn(() => false),
   isMaximized: vi.fn(),
@@ -176,38 +173,6 @@ vi.mock("@/components/settings/SettingsPage", () => ({
   SettingsPage: () => <div data-testid="settings-page" />,
 }));
 
-vi.mock("@/components/skills/UnifiedSkillsPanel", () => ({
-  // v7：Skills 的页头（添加 / 检查更新 / 存储与同步）在面板自己里面
-  default: ({ initialView }: { initialView?: string }) => {
-    skillsPanelMocks.initialViews.push(initialView ?? "installed");
-    return <div data-testid="unified-skills-panel">{initialView}</div>;
-  },
-}));
-
-vi.mock("@/components/mcp/McpPanel", () => ({
-  default: ({ open, onOpenChange }: any) =>
-    open ? (
-      <div data-testid="mcp-panel">
-        <button onClick={() => onOpenChange(false)}>close-mcp</button>
-      </div>
-    ) : (
-      <button onClick={() => onOpenChange(true)}>open-mcp</button>
-    ),
-}));
-
-vi.mock("@/components/mcp/UnifiedMcpPanel", async () => {
-  const { useUnsavedChangesTracker } = await vi.importActual<
-    typeof import("@/lib/unsavedChanges")
-  >("@/lib/unsavedChanges");
-  // 当作一直开着的 MCP 编辑页：输入即登记未保存的修改
-  const Body = () => (
-    <div data-testid="mcp-editor" {...useUnsavedChangesTracker()}>
-      <input aria-label="mcp-field" />
-    </div>
-  );
-  return { default: Body };
-});
-
 /** 侧栏里的应用行（v7 侧栏取代了原来页头的应用切换器） */
 const sidebarApp = (name: string) =>
   // 首次启动提示是模态对话框，会把侧栏标成 aria-hidden，所以带上 hidden
@@ -232,7 +197,6 @@ describe("App integration with MSW", () => {
     resetProviderState();
     toastSuccessMock.mockReset();
     toastErrorMock.mockReset();
-    skillsPanelMocks.initialViews = [];
     windowMocks.isLinux.mockReturnValue(false);
     windowMocks.isMaximized.mockResolvedValue(false);
     windowMocks.isFullscreen.mockResolvedValue(false);
@@ -466,34 +430,6 @@ describe("App integration with MSW", () => {
     expect(
       screen.queryByTestId("edit-provider-dialog"),
     ).not.toBeInTheDocument();
-  }, 10_000);
-
-  it("keeps the unsaved guard when re-clicking the current page", async () => {
-    const { default: App } = await import("@/App");
-    renderApp(App);
-    await waitFor(() =>
-      expect(screen.getByTestId("provider-list").textContent).toContain(
-        "claude-1",
-      ),
-    );
-
-    fireEvent.click(sidebarApp("MCP"));
-    fireEvent.input(await screen.findByLabelText("mcp-field"), {
-      target: { value: "draft" },
-    });
-
-    // 再点当前页：不离开，所以不问，也不能把未保存登记清掉
-    fireEvent.click(sidebarApp("MCP"));
-    expect(screen.queryByTestId("confirm-dialog")).not.toBeInTheDocument();
-    expect(screen.getByTestId("mcp-editor")).toBeInTheDocument();
-
-    // 之后真的离开时照样要问
-    fireEvent.click(sidebarApp("nav.usage"));
-    expect(await screen.findByTestId("confirm-message")).toHaveTextContent(
-      "common.unsavedLeaveMessage",
-    );
-    fireEvent.click(screen.getByText("cancel-delete"));
-    expect(screen.getByTestId("mcp-editor")).toBeInTheDocument();
   }, 10_000);
 
   it("shows toast when auto sync fails in background", async () => {
@@ -984,16 +920,6 @@ describe("App integration with MSW", () => {
     liveIdsSpy.mockRestore();
   });
 
-  it("renders the Skills page with its own header", async () => {
-    localStorage.setItem("cc-switch-last-view", "skills");
-    const { default: App } = await import("@/App");
-    renderApp(App);
-
-    expect(await screen.findByTestId("unified-skills-panel")).toHaveTextContent(
-      "installed",
-    );
-  });
-
   it("navigates OpenClaw and Hermes pages with underline tabs", async () => {
     const { default: App } = await import("@/App");
     renderApp(App);
@@ -1069,16 +995,6 @@ describe("App integration with MSW", () => {
           hidden: true,
         })[0],
       ).toHaveValue("agent notes"),
-    );
-  });
-
-  it("opens the old skillsDiscovery view as the Discover segment", async () => {
-    localStorage.setItem("cc-switch-last-view", "skillsDiscovery");
-    const { default: App } = await import("@/App");
-    renderApp(App);
-
-    expect(await screen.findByTestId("unified-skills-panel")).toHaveTextContent(
-      "discover",
     );
   });
 

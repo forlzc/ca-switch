@@ -16,7 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { RADIO_CLASS } from "@/components/mcp/formBits";
+import { RADIO_CLASS } from "@/components/common/formBits";
 import { ToolInstallRow } from "@/components/settings/ToolInstallRow";
 import {
   hermesUninstallMayLeaveFiles,

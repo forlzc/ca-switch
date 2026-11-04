@@ -17,7 +17,6 @@ use std::sync::Mutex;
 
 pub(crate) const MAX_FILE_BYTES: u64 = 1024 * 1024;
 static MODELS_LOCK: Mutex<()> = Mutex::new(());
-static MCP_LOCK: Mutex<()> = Mutex::new(());
 #[cfg(test)]
 static TEST_AGENT_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 
@@ -201,12 +200,6 @@ pub(crate) fn get_omp_settings_path() -> Result<PathBuf, AppError> {
     }
     Ok(agent.join("config.yml"))
 }
-
-/// User-level MCP config path (`~/.omp/agent/mcp.json`).
-pub(crate) fn get_omp_mcp_path() -> Result<PathBuf, AppError> {
-    Ok(get_omp_agent_dir()?.join("mcp.json"))
-}
-
 // ============================================================================
 // Byte-level I/O
 // ============================================================================
@@ -962,32 +955,6 @@ pub(crate) fn read_default_provider_id() -> Result<Option<String>, AppError> {
 // ============================================================================
 // MCP servers (mcp.json)
 // ============================================================================
-
-/// Mutate the native MCP document. Other root keys are kept; an external write between the
-/// read and the write is refused.
-pub(crate) fn update_omp_mcp_document(
-    update: impl FnOnce(&mut Value) -> Result<bool, AppError>,
-) -> Result<(), AppError> {
-    let _guard = MCP_LOCK.lock()?;
-    let path = get_omp_mcp_path()?;
-    let before = read_bytes(&path)?;
-    let mut document: Value = match &before {
-        None => Value::Object(Default::default()),
-        Some(bytes) => serde_json::from_slice(bytes)
-            .map_err(|_| AppError::Config("omp.errors.invalidMcp".into()))?,
-    };
-    if !document.is_object() || document.get("mcpServers").is_some_and(|v| !v.is_object()) {
-        return Err(AppError::Config("omp.errors.invalidMcp".into()));
-    }
-    if update(&mut document)? {
-        let mut after = serde_json::to_vec_pretty(&document)
-            .map_err(|e| AppError::JsonSerialize { source: e })?;
-        after.push(b'\n');
-        write_and_commit(&path, before.as_deref(), &after, || Ok(()))?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 pub(crate) mod test_support {
     use std::path::{Path, PathBuf};

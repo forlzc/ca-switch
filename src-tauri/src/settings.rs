@@ -8,7 +8,6 @@ use std::time::Duration;
 
 use crate::app_config::AppType;
 use crate::error::AppError;
-use crate::services::skill::{SkillStorageLocation, SyncMethod};
 
 /// 自定义端点配置（历史兼容，实际存储在 provider.meta.custom_endpoints）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -641,14 +640,6 @@ pub struct AppSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy_client_host: Option<String>,
 
-    // ===== Skill 同步设置 =====
-    /// Skill 同步方式：auto（默认，优先 symlink）、symlink、copy
-    #[serde(default)]
-    pub skill_sync_method: SyncMethod,
-    /// Skill 存储位置：cc_switch（默认）或 unified（~/.agents/skills/）
-    #[serde(default)]
-    pub skill_storage_location: SkillStorageLocation,
-
     // ===== WebDAV 同步设置 =====
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webdav_sync: Option<WebDavSyncSettings>,
@@ -753,8 +744,6 @@ impl Default for AppSettings {
             current_provider_hermes: None,
             current_provider_agy: None,
             proxy_client_host: None,
-            skill_sync_method: SyncMethod::default(),
-            skill_storage_location: SkillStorageLocation::default(),
             webdav_sync: None,
             s3_sync: None,
             webdav_backup: None,
@@ -1493,39 +1482,6 @@ pub fn get_effective_current_provider(
 
     // Fallback 到数据库的 is_current
     db.get_current_provider(app_type.as_str())
-}
-
-// ===== Skill 同步方式管理函数 =====
-
-/// 获取 Skill 同步方式配置
-pub fn get_skill_sync_method() -> SyncMethod {
-    settings_store()
-        .read()
-        .unwrap_or_else(|e| {
-            log::warn!("设置锁已毒化，使用恢复值: {e}");
-            e.into_inner()
-        })
-        .skill_sync_method
-}
-
-// ===== Skill 存储位置管理函数 =====
-
-/// 获取 Skill 存储位置配置
-pub fn get_skill_storage_location() -> SkillStorageLocation {
-    settings_store()
-        .read()
-        .unwrap_or_else(|e| {
-            log::warn!("设置锁已毒化，使用恢复值: {e}");
-            e.into_inner()
-        })
-        .skill_storage_location
-}
-
-/// 设置 Skill 存储位置
-pub fn set_skill_storage_location(location: SkillStorageLocation) -> Result<(), AppError> {
-    mutate_settings(|s| {
-        s.skill_storage_location = location;
-    })
 }
 
 // ===== 备份策略管理函数 =====

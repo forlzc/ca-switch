@@ -16,6 +16,7 @@
 //! 更新快照：`CC_SWITCH_UPDATE_GOLDEN=1 cargo test --test golden`，再逐个审 diff。
 //! 快照变了就意味着行为变了，要能说清楚为什么。
 
+#![allow(dead_code)] // 快照工具函数按需使用，不是每个金标用例都覆盖全部 helper
 #[allow(dead_code)]
 #[path = "../support.rs"]
 mod support;
@@ -24,5 +25,4 @@ mod claude_key_fields;
 mod codex_red_lines;
 mod file_modes;
 mod import_rows;
-mod mcp_bytes;
 mod util;

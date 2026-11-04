@@ -12,7 +12,6 @@ use crate::database::backup::BackupEntry;
 use crate::database::Database;
 use crate::error::AppError;
 use crate::services::provider::ProviderService;
-use crate::services::skill::skill_state_write_guard;
 use crate::services::sync_protocol::sync_mutex;
 use crate::store::AppState;
 
@@ -62,7 +61,6 @@ pub async fn import_config_from_file(
             let backup_id = {
                 // SQL restore replaces the `skills` table. Exclude local Skill
                 // mutations while the database image is being swapped.
-                let _skill_state_guard = skill_state_write_guard();
                 db.import_sql(&path_buf)?
             };
             let warning =
@@ -176,10 +174,7 @@ pub async fn restore_db_backup(
     let db = app_state_for_sync.db.clone();
     run_with_database_restore_lock(move || {
         tauri::async_runtime::spawn_blocking(move || {
-            let restored = {
-                let _skill_state_guard = skill_state_write_guard();
-                db.restore_from_backup(&filename)?
-            };
+            let restored = { db.restore_from_backup(&filename)? };
             let warning =
                 post_sync_warning_from_result(Ok(run_post_import_sync(&app_state_for_sync)));
             if let Some(message) = warning {

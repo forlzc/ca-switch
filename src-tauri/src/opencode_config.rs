@@ -609,40 +609,6 @@ pub fn set_default_model(model: &str) -> Result<(), AppError> {
     })
     .map(|_| ())
 }
-
-pub fn get_mcp_servers() -> Result<Map<String, Value>, AppError> {
-    let config = read_opencode_config()?;
-    Ok(config
-        .get("mcp")
-        .and_then(|v| v.as_object())
-        .cloned()
-        .unwrap_or_default())
-}
-
-pub fn set_mcp_server(id: &str, config: Value) -> Result<(), AppError> {
-    edit_config(get_opencode_config_path, |full_config| {
-        if !full_config.get("mcp").is_some_and(Value::is_object) {
-            if full_config.get("mcp").is_some() {
-                log::warn!(
-                    "OpenCode 的 MCP 服务配置格式有误，将清空原有 MCP 服务配置，再保存当前服务"
-                );
-            }
-            full_config["mcp"] = json!({});
-        }
-        full_config["mcp"][id] = config;
-    })
-    .map(|_| ())
-}
-
-pub fn remove_mcp_server(id: &str) -> Result<(), AppError> {
-    edit_config(get_opencode_config_path, |config| {
-        if let Some(mcp) = config.get_mut("mcp").and_then(Value::as_object_mut) {
-            mcp.remove(id);
-        }
-    })
-    .map(|_| ())
-}
-
 pub fn add_plugin(plugin_name: &str) -> Result<(), AppError> {
     edit_config(get_opencode_config_path, |config| {
         insert_plugin(config, plugin_name)
@@ -1282,96 +1248,6 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn selection_and_crud_preserve_selected_file_and_leave_other_file_untouched() {
-        for custom in [false, true] {
-            for (has_json, has_jsonc) in
-                [(false, false), (true, false), (false, true), (true, true)]
-            {
-                let temp = tempfile::tempdir().unwrap();
-                let _guard = TestHomeGuard::set(temp.path());
-                let dir = if custom {
-                    let dir = temp.path().join("custom");
-                    crate::settings::update_settings(crate::settings::AppSettings {
-                        opencode_config_dir: Some(dir.to_string_lossy().into_owned()),
-                        ..Default::default()
-                    })
-                    .unwrap();
-                    dir
-                } else {
-                    temp.path().join(".config/opencode")
-                };
-                std::fs::create_dir_all(&dir).unwrap();
-                let json_path = dir.join("opencode.json");
-                let jsonc_path = dir.join("opencode.jsonc");
-                let original = "{\r\n\t/* 中文注释 */\r\n\t\"model\": \"keep\", // 模型\r\n\t\"provider\": {},\r\n\t\"mcp\": {},\r\n}\r\n";
-                if has_json {
-                    std::fs::write(&json_path, original).unwrap();
-                }
-                if has_jsonc {
-                    std::fs::write(&jsonc_path, original).unwrap();
-                }
-                let selected = if has_jsonc { &jsonc_path } else { &json_path };
-                assert_eq!(get_opencode_config_path().unwrap(), *selected);
-                remove_provider("missing").unwrap();
-                remove_mcp_server("missing").unwrap();
-                assert_eq!(selected.exists(), has_json || has_jsonc);
-
-                for value in ["first", "updated"] {
-                    set_provider("escaped\"供应商", json!({"options":{"apiKey":value}})).unwrap();
-                    set_mcp_server("tool", json!({"type":"local","command":[value]})).unwrap();
-                    assert_eq!(
-                        get_providers().unwrap()["escaped\"供应商"]["options"]["apiKey"],
-                        value
-                    );
-                    assert_eq!(get_mcp_servers().unwrap()["tool"]["command"][0], value);
-                    let before = std::fs::read(selected).unwrap();
-                    let modified = std::fs::metadata(selected).unwrap().modified().unwrap();
-                    set_provider("escaped\"供应商", json!({"options":{"apiKey":value}})).unwrap();
-                    set_mcp_server("tool", json!({"type":"local","command":[value]})).unwrap();
-                    assert_eq!(std::fs::read(selected).unwrap(), before);
-                    assert_eq!(
-                        std::fs::metadata(selected).unwrap().modified().unwrap(),
-                        modified
-                    );
-                }
-                add_plugin("unrelated").unwrap();
-                add_plugin("oh-my-opencode@latest").unwrap();
-                assert_eq!(
-                    read_opencode_config().unwrap()["plugin"],
-                    json!(["unrelated", "oh-my-openagent@latest"])
-                );
-                add_plugin("oh-my-opencode-slim@latest").unwrap();
-                assert_eq!(
-                    read_opencode_config().unwrap()["plugin"],
-                    json!(["unrelated", "oh-my-opencode-slim@latest"])
-                );
-                assert!(remove_plugins_by_prefixes(&SLIM_OMO_PLUGIN_PREFIXES).unwrap());
-                assert_eq!(
-                    read_opencode_config().unwrap()["plugin"],
-                    json!(["unrelated"])
-                );
-                remove_provider("escaped\"供应商").unwrap();
-                remove_mcp_server("tool").unwrap();
-                assert!(get_providers().unwrap().is_empty());
-                assert!(get_mcp_servers().unwrap().is_empty());
-                let saved = std::fs::read_to_string(selected).unwrap();
-                if has_json || has_jsonc {
-                    assert!(
-                        saved.contains("\t/* 中文注释 */\r\n\t\"model\": \"keep\", // 模型\r\n")
-                    );
-                    assert!(!saved.replace("\r\n", "").contains('\n'));
-                }
-                if has_json && has_jsonc {
-                    assert_eq!(std::fs::read_to_string(&json_path).unwrap(), original);
-                }
-                assert_eq!(jsonc_path.exists(), has_jsonc);
-                assert_eq!(json_path.exists(), has_json || !has_jsonc);
-            }
-        }
-    }
-
-    #[test]
-    #[serial_test::serial]
     fn invalid_selected_config_never_falls_back_or_overwrites_files() {
         let temp = tempfile::tempdir().unwrap();
         let _guard = TestHomeGuard::set(temp.path());
@@ -1497,4 +1373,30 @@ mod tests {
             assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
         }
     }
+}
+
+#[allow(dead_code)] // MCP 支持已移除，这些写盘助手目前只被测试引用
+pub fn set_mcp_server(id: &str, config: Value) -> Result<(), AppError> {
+    edit_config(get_opencode_config_path, |full_config| {
+        if !full_config.get("mcp").is_some_and(Value::is_object) {
+            if full_config.get("mcp").is_some() {
+                log::warn!(
+                    "OpenCode 的 MCP 服务配置格式有误，将清空原有 MCP 服务配置，再保存当前服务"
+                );
+            }
+            full_config["mcp"] = json!({});
+        }
+        full_config["mcp"][id] = config;
+    })
+    .map(|_| ())
+}
+
+#[allow(dead_code)] // MCP 支持已移除，这些写盘助手目前只被测试引用
+pub fn remove_mcp_server(id: &str) -> Result<(), AppError> {
+    edit_config(get_opencode_config_path, |config| {
+        if let Some(mcp) = config.get_mut("mcp").and_then(Value::as_object_mut) {
+            mcp.remove(id);
+        }
+    })
+    .map(|_| ())
 }

@@ -13,7 +13,6 @@ use crate::config::{get_claude_settings_path, read_json_file};
 use crate::error::AppError;
 use crate::provider::Provider;
 use crate::proxy::providers::codex_oauth_auth::{CodexLiveAuthSwitchGuard, CodexOAuthManager};
-use crate::services::mcp::McpService;
 use crate::store::AppState;
 
 use super::normalize_claude_models_in_value;
@@ -768,19 +767,12 @@ fn sync_all_providers_to_live(state: &AppState, app_type: &AppType) -> Result<()
     Ok(())
 }
 
-/// 把累加式应用的全部供应商同步到 live，再重投影它的 MCP。
+/// 把累加式应用的全部供应商同步到 live。
 pub(crate) fn sync_additive_app_to_live(
     state: &AppState,
     app_type: &AppType,
 ) -> Result<(), AppError> {
-    sync_all_providers_to_live(state, app_type)?;
-
-    // 本函数语义是"把这个应用同步到 live"，MCP 重投影也只针对该应用；
-    // 全量 sync_all_enabled 会把无关应用的 live 损坏牵连进来。投影失败
-    // 上抛（不降级）：这里没有已变更的 DB 状态需要保护，调用方重试即可。
-    McpService::sync_enabled_for_app(state, app_type)?;
-
-    Ok(())
+    sync_all_providers_to_live(state, app_type)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -849,7 +841,7 @@ pub(crate) fn sync_current_provider_for_app_respecting_mode(
     sync_live_for_provider_respecting_mode(state, app_type, provider, None).map(Some)
 }
 
-/// Populate newly encountered DSH profiles with managed providers and enabled MCP servers.
+/// Populate newly encountered DSH profiles with managed providers.
 /// The native writer records completion locally so later native deletions remain intentional.
 pub(crate) fn initialize_dsh_profiles(state: &AppState) -> Result<(), AppError> {
     let providers = state
@@ -865,13 +857,8 @@ pub(crate) fn initialize_dsh_profiles(state: &AppState) -> Result<(), AppError> 
         })
         .map(|(id, provider)| (id, provider.settings_config))
         .collect();
-    let servers = state
-        .db
-        .get_all_mcp_servers()?
-        .into_iter()
-        .filter(|(_, server)| server.apps.dsh)
-        .map(|(id, server)| (id, server.server))
-        .collect();
+    // MCP 已移除：DSH profile 只同步托管供应商，不再写入 MCP 段落。
+    let servers = indexmap::IndexMap::new();
     crate::dsh_config::initialize_profiles(&providers, &servers)
 }
 
@@ -909,20 +896,6 @@ pub fn sync_current_to_live(state: &AppState) -> Result<(), AppError> {
         if let Err(error) = result {
             log::warn!("同步 Provider 到 {app_type:?} 失败: {error}");
             failures.push(format!("provider/{}: {error}", app_type.as_str()));
-        }
-    }
-
-    // MCP sync is already best-effort per application. Preserve its aggregate
-    // error while continuing with Skills.
-    if let Err(error) = McpService::sync_all_enabled(state) {
-        failures.push(format!("mcp: {error}"));
-    }
-
-    // Skill sync
-    for app_type in AppType::all() {
-        if let Err(e) = crate::services::skill::SkillService::sync_to_app(&state.db, &app_type) {
-            log::warn!("同步 Skill 到 {app_type:?} 失败: {e}");
-            failures.push(format!("skill/{}: {e}", app_type.as_str()));
         }
     }
 

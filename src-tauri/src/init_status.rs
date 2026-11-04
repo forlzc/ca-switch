@@ -78,22 +78,6 @@ static SKILLS_MIGRATION_RESULT: OnceLock<RwLock<Option<SkillsMigrationPayload>>>
 fn skills_migration_cell() -> &'static RwLock<Option<SkillsMigrationPayload>> {
     SKILLS_MIGRATION_RESULT.get_or_init(|| RwLock::new(None))
 }
-
-pub fn set_skills_migration_result(count: usize) {
-    if let Ok(mut guard) = skills_migration_cell().write() {
-        *guard = Some(SkillsMigrationPayload { count, error: None });
-    }
-}
-
-pub fn set_skills_migration_error(error: String) {
-    if let Ok(mut guard) = skills_migration_cell().write() {
-        *guard = Some(SkillsMigrationPayload {
-            count: 0,
-            error: Some(error),
-        });
-    }
-}
-
 /// 获取并消费 Skills 迁移结果（只返回一次 Some，之后返回 None）
 pub fn take_skills_migration_result() -> Option<SkillsMigrationPayload> {
     if let Ok(mut guard) = skills_migration_cell().write() {

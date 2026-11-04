@@ -1,6 +1,4 @@
-use cc_switch_lib::{
-    AppType, McpApps, McpServer, McpService, Prompt, PromptService, Provider, ProviderService,
-};
+use cc_switch_lib::{AppType, Prompt, PromptService, Provider, ProviderService};
 use serde_json::json;
 use std::{ffi::OsString, fs};
 
@@ -485,31 +483,11 @@ fn kimi_import_and_mutations_preserve_native_capabilities() {
 }
 
 #[test]
-fn kimi_mcp_and_global_prompts_follow_the_native_home() {
+fn kimi_global_prompts_follow_the_native_home() {
     let _guard = test_mutex().lock().unwrap();
     reset_test_fs();
     let home = KimiHome::new();
     let state = create_test_state().unwrap();
-    let server = McpServer {
-        id: "test".into(),
-        name: "Test".into(),
-        server: json!({"type":"sse","url":"https://example.com/sse"}),
-        apps: McpApps {
-            kimi: true,
-            ..Default::default()
-        },
-        description: None,
-        homepage: None,
-        docs: None,
-        tags: vec![],
-    };
-    McpService::upsert_server(&state, server).unwrap();
-    let path = home.directory.path().join("mcp.json");
-    let value: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    assert_eq!(value["mcpServers"]["test"]["transport"], "sse");
-    McpService::toggle_app(&state, "test", AppType::Kimi, false).unwrap();
-    let value: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-    assert!(value["mcpServers"].get("test").is_none());
     let prompt:Prompt=serde_json::from_value(json!({"id":"global","name":"Global","content":"Use the project conventions.","enabled":false})).unwrap();
     PromptService::upsert_prompt(&state, AppType::Kimi, "global", prompt).unwrap();
     PromptService::enable_prompt(&state, AppType::Kimi, "global").unwrap();

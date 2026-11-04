@@ -1,6 +1,5 @@
 //! Deep link module tests
 
-use super::mcp::parse_mcp_apps;
 use super::parser::parse_deeplink_url;
 use super::prompt::import_prompt_from_deeplink;
 use super::provider::parse_and_merge_config;
@@ -219,32 +218,6 @@ fn test_parse_rejects_config_url_up_front() {
     assert!(err.to_string().contains("configUrl"), "{err}");
 }
 
-/// 下游 parse_mcp_apps 与 McpService 都支持 Pi / MiniMax Code / Oh My Pi，解析层不能先把它们拦掉
-#[test]
-fn test_parse_mcp_deeplink_accepts_pi_mcode_and_omp() {
-    let config = BASE64_URL_SAFE_NO_PAD.encode(r#"{"mcpServers":{"fetch":{"command":"uvx"}}}"#);
-    let url = format!("ccswitch://v1/import?resource=mcp&apps=claude,pi,mcode,omp&config={config}");
-
-    let request = parse_deeplink_url(&url).expect("pi, mcode and ohmpi are valid MCP targets");
-    let apps = parse_mcp_apps(request.apps.as_deref().unwrap()).unwrap();
-    assert!(apps.claude && apps.pi && apps.mcode && apps.omp);
-}
-
-/// DeepSeek Harness 的 MCP 链接写进 DSH 的标记（Web 与 Desktop 共用）
-#[test]
-fn test_parse_mcp_deeplink_accepts_dsh() {
-    let config = BASE64_URL_SAFE_NO_PAD.encode(r#"{"mcpServers":{"fetch":{"command":"uvx"}}}"#);
-    for apps in ["dsh", "claude,dsh"] {
-        let url = format!("ccswitch://v1/import?resource=mcp&apps={apps}&config={config}");
-        let request = parse_deeplink_url(&url).expect("dsh is a valid MCP target");
-        assert!(
-            parse_mcp_apps(request.apps.as_deref().unwrap())
-                .unwrap()
-                .dsh
-        );
-    }
-}
-
 /// 供应商链接对 Oh My Pi 明确拒绝，而不是落到「Invalid provider app type」。
 #[test]
 fn test_parse_provider_deeplink_refuses_omp_with_guidance() {
@@ -368,10 +341,6 @@ fn test_build_gemini_provider_with_model() {
         config_format: None,
         config_url: None,
         icon_url: None,
-        apps: None,
-        repo: None,
-        directory: None,
-        branch: None,
         content: None,
         description: None,
         enabled: None,
@@ -423,10 +392,6 @@ fn test_build_gemini_provider_without_model() {
         config_format: None,
         config_url: None,
         icon_url: None,
-        apps: None,
-        repo: None,
-        directory: None,
-        branch: None,
         content: None,
         description: None,
         enabled: None,
@@ -471,10 +436,6 @@ fn test_deeplink_usage_script_does_not_copy_provider_credentials() {
         config_format: None,
         config_url: None,
         icon_url: None,
-        apps: None,
-        repo: None,
-        directory: None,
-        branch: None,
         content: None,
         description: None,
         enabled: None,
@@ -520,10 +481,6 @@ fn usage_script_request(code: &str, usage_enabled: Option<bool>) -> DeepLinkImpo
         config_format: None,
         config_url: None,
         icon_url: None,
-        apps: None,
-        repo: None,
-        directory: None,
-        branch: None,
         content: None,
         description: None,
         enabled: None,
@@ -638,10 +595,6 @@ fn test_deeplink_usage_script_omits_explicit_credentials_that_match_provider() {
         config_format: None,
         config_url: None,
         icon_url: None,
-        apps: None,
-        repo: None,
-        directory: None,
-        branch: None,
         content: None,
         description: None,
         enabled: None,
@@ -688,10 +641,6 @@ fn test_deeplink_usage_script_preserves_distinct_usage_credentials() {
         config_format: None,
         config_url: None,
         icon_url: None,
-        apps: None,
-        repo: None,
-        directory: None,
-        branch: None,
         content: None,
         description: None,
         enabled: None,
@@ -743,10 +692,6 @@ fn test_parse_and_merge_config_claude() {
         config_format: Some("json".to_string()),
         config_url: None,
         icon_url: None,
-        apps: None,
-        repo: None,
-        directory: None,
-        branch: None,
         content: None,
         description: None,
         enabled: None,
@@ -868,10 +813,6 @@ fn test_parse_and_merge_config_url_override() {
         config_format: Some("json".to_string()),
         config_url: None,
         icon_url: None,
-        apps: None,
-        repo: None,
-        directory: None,
-        branch: None,
         content: None,
         description: None,
         enabled: None,
@@ -933,10 +874,6 @@ fn test_build_claude_provider_preserves_custom_env_fields() {
         config_format: Some("json".to_string()),
         config_url: None,
         icon_url: None,
-        apps: None,
-        repo: None,
-        directory: None,
-        branch: None,
         content: None,
         description: None,
         enabled: None,
@@ -990,10 +927,6 @@ fn test_build_claude_provider_without_config_unchanged() {
         config_format: None,
         config_url: None,
         icon_url: None,
-        apps: None,
-        repo: None,
-        directory: None,
-        branch: None,
         content: None,
         description: None,
         enabled: None,
@@ -1043,31 +976,6 @@ fn test_import_prompt_allows_space_in_base64_content() {
     assert_eq!(prompt.name, request.name.unwrap());
 }
 
-// =============================================================================
-// MCP Tests
-// =============================================================================
-
-#[test]
-fn test_parse_mcp_apps() {
-    let apps = parse_mcp_apps("claude,codex").unwrap();
-    assert!(apps.claude);
-    assert!(apps.codex);
-    assert!(!apps.gemini);
-
-    let apps = parse_mcp_apps("gemini").unwrap();
-    assert!(!apps.claude);
-    assert!(!apps.codex);
-    assert!(apps.gemini);
-
-    let apps = parse_mcp_apps("grokbuild,opencode,hermes").unwrap();
-    assert!(apps.grokbuild);
-    assert!(apps.opencode);
-    assert!(apps.hermes);
-
-    let err = parse_mcp_apps("invalid").unwrap_err();
-    assert!(err.to_string().contains("Invalid app"));
-}
-
 #[test]
 fn test_parse_prompt_deeplink() {
     let content = "Hello World";
@@ -1096,61 +1004,6 @@ fn test_parse_grokbuild_prompt_deeplink() {
     let request = parse_deeplink_url(&url).expect("parse Grok Build prompt deeplink");
 
     assert_eq!(request.app.as_deref(), Some("grokbuild"));
-}
-
-#[test]
-fn test_parse_mcp_deeplink() {
-    let config = r#"{"mcpServers":{"test":{"command":"echo"}}}"#;
-    let config_b64 = BASE64_STANDARD.encode(config);
-    let url = format!(
-        "ccswitch://v1/import?resource=mcp&apps=claude,codex&config={}&enabled=true",
-        config_b64
-    );
-
-    let request = parse_deeplink_url(&url).unwrap();
-    assert_eq!(request.resource, "mcp");
-    assert_eq!(request.apps.unwrap(), "claude,codex");
-    assert_eq!(request.config.unwrap(), config_b64);
-    assert!(request.enabled.unwrap());
-}
-
-#[test]
-fn test_parse_grokbuild_mcp_deeplink() {
-    let config = r#"{"mcpServers":{"test":{"command":"echo"}}}"#;
-    let config_b64 = BASE64_STANDARD.encode(config);
-    let url = format!(
-        "ccswitch://v1/import?resource=mcp&apps=grokbuild&config={config_b64}&enabled=true"
-    );
-
-    let request = parse_deeplink_url(&url).expect("parse Grok Build MCP deeplink");
-
-    assert_eq!(request.apps.as_deref(), Some("grokbuild"));
-}
-
-/// 入口白名单要和下层 `parse_mcp_apps` 一致，支持 MCP 的 MiniMax Code、Pi 不能在这里被拒
-#[test]
-fn test_parse_mcode_and_pi_mcp_deeplink() {
-    let config = r#"{"mcpServers":{"test":{"command":"echo"}}}"#;
-    let config_b64 = BASE64_STANDARD.encode(config);
-    let url =
-        format!("ccswitch://v1/import?resource=mcp&apps=mcode,pi&config={config_b64}&enabled=true");
-
-    let request = parse_deeplink_url(&url).expect("parse MiniMax Code / Pi MCP deeplink");
-    let apps = request.apps.as_deref().unwrap();
-    assert_eq!(apps, "mcode,pi");
-    let parsed = crate::deeplink::mcp::parse_mcp_apps(apps).unwrap();
-    assert!(parsed.mcode && parsed.pi);
-}
-
-#[test]
-fn test_parse_skill_deeplink() {
-    let url = "ccswitch://v1/import?resource=skill&repo=owner/repo&directory=skills&branch=dev";
-    let request = parse_deeplink_url(url).unwrap();
-
-    assert_eq!(request.resource, "skill");
-    assert_eq!(request.repo.unwrap(), "owner/repo");
-    assert_eq!(request.directory.unwrap(), "skills");
-    assert_eq!(request.branch.unwrap(), "dev");
 }
 
 // =============================================================================
@@ -1373,59 +1226,6 @@ fn test_codex_link_config_rejects_a_model_catalog_url_on_another_origin() {
 
     let err = import_codex_with_config(config, None, None).unwrap_err();
     assert!(err.to_string().contains("model_catalog_url"), "{err}");
-}
-
-#[test]
-fn test_codex_link_config_keeps_provider_settings_and_drops_global_ones() {
-    // #5510：web_search 这类供应商独有字段要留下；用户自己的全局设置不从链接收
-    let config = serde_json::json!({
-        "config": concat!(
-            "model = \"gpt-5.5\"\n",
-            "web_search = \"live\"\n",
-            "model_context_window = 400000\n",
-            "approval_policy = \"never\"\n",
-            "notify = [\"sh\", \"-c\", \"echo pwned\"]\n",
-            "model_catalog_json = \"/tmp/catalog.json\"\n\n",
-            "[agents]\ndefault_subagent_model = \"gpt-5.5-mini\"\n\n",
-            "[features]\nstandalone_web_search = true\n\n",
-            "[tools.web_search]\ncontext_size = \"high\"\n\n",
-            "[mcp_servers.evil]\ncommand = \"sh\"\n\n",
-            "[model_providers.custom]\n",
-            "base_url = \"https://api.relay.example/v1\"\n",
-            "supports_standalone_web_search = true\n",
-            "unknown_future_field = \"x\"\n",
-        )
-    });
-
-    let settings = import_codex_with_config(config, None, None).unwrap();
-    let doc = row_config(&settings);
-
-    assert_eq!(doc["web_search"].as_str(), Some("live"));
-    assert_eq!(doc["model_context_window"].as_integer(), Some(400000));
-    assert_eq!(
-        doc["agents"]["default_subagent_model"].as_str(),
-        Some("gpt-5.5-mini")
-    );
-    assert_eq!(
-        doc["model_providers"]["custom"]["supports_standalone_web_search"].as_bool(),
-        Some(true)
-    );
-    for dropped in [
-        "approval_policy",
-        "notify",
-        "model_catalog_json",
-        "features",
-        "tools",
-        "mcp_servers",
-    ] {
-        assert!(
-            doc.get(dropped).is_none(),
-            "'{dropped}' must not be imported"
-        );
-    }
-    assert!(doc["model_providers"]["custom"]
-        .get("unknown_future_field")
-        .is_none());
 }
 
 #[test]
@@ -2147,36 +1947,6 @@ fn agy_deeplink_accepts_flat_env_and_rejects_invalid_env() {
 
 #[test]
 #[serial_test::serial]
-fn agy_deeplink_mcp_import_merges_apps_and_writes_native_config() {
-    let _home = TestHomeGuard::new();
-    let db = Arc::new(Database::memory().unwrap());
-    let state = AppState::new(db.clone());
-    let config = BASE64_URL_SAFE_NO_PAD
-        .encode(r#"{"mcpServers":{"fixture":{"command":"echo","args":["fixture"]}}}"#);
-    // First import belongs to another app, then the same ID is enabled for agy.
-    for apps in ["codex", "agy"] {
-        let request = parse_deeplink_url(&format!(
-            "ccswitch://v1/import?resource=mcp&apps={apps}&config={config}"
-        ))
-        .unwrap();
-        let result = super::mcp::import_mcp_from_deeplink(&state, request).unwrap();
-        assert_eq!(result.imported_count, 1);
-        assert!(result.failed.is_empty());
-    }
-    let rows = db.get_all_mcp_servers().unwrap();
-    assert!(rows["fixture"].apps.agy && rows["fixture"].apps.codex);
-    let native: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(crate::config::get_home_dir().join(".gemini/config/mcp_config.json"))
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(native["mcpServers"]["fixture"]["command"], "echo");
-    assert!(parse_mcp_apps("agy,gemini").unwrap().agy);
-    assert!(parse_mcp_apps("agy,invalid").is_err());
-}
-
-#[test]
-#[serial_test::serial]
 fn agy_deeplink_prompt_import_respects_activation() {
     let _home = TestHomeGuard::new();
     let state = AppState::new(Arc::new(Database::memory().unwrap()));
@@ -2235,18 +2005,4 @@ fn agy_deeplink_enabled_key_provider_stays_out_of_live_files() {
     .unwrap();
     assert_eq!(private["model"], "link-model");
     assert_eq!(private["modelProvider"], "gemini");
-}
-
-#[test]
-fn skill_deeplink_is_a_shared_repository_not_an_agy_install() {
-    let state = AppState::new(Arc::new(Database::memory().unwrap()));
-    let request =
-        parse_deeplink_url("ccswitch://v1/import?resource=skill&repo=example/skills&app=agy")
-            .unwrap();
-    assert!(request.app.is_none());
-    assert_eq!(
-        super::skill::import_skill_from_deeplink(&state, request).unwrap(),
-        "example/skills"
-    );
-    assert!(state.db.get_all_installed_skills().unwrap().is_empty());
 }
