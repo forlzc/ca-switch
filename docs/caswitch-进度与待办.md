@@ -173,12 +173,21 @@ P0–P1 与 P2 的 **2a、2b-1、2e（含 2d）、2b-2** 已全部落地并逐�
   `oauth2` / `x-access-token` 用户名、URL 内嵌凭据三种方式均试过，结果一致。
 - 另有间歇性的 `github.com:443` 连接超时（`api.github.com` 始终可用，属沙箱网络波动）；
   其中一次连接成功并返回 403，足以排除纯网络原因。
+- 随后改用用户提供的一枚 fine-grained PAT（`github_pat_` 前缀、93 字符，格式完整）：
+  REST 以 `Bearer` / `token` / Basic 三种方式均返回 `401 Bad credentials`，git 端返回
+  `Invalid username or token. Password authentication is not supported for Git operations`。
+  判定为该 PAT 本身无效（未生效 / 已撤销 / 复制有误），不是权限范围问题。
 
 **解除方式（二选一）**：
 
-1. 在 CodeBuddy 设置 → 连接器 重新授权 GitHub，确保授予目标仓库 Contents 读写；
-2. 提供一枚有 `repo`（classic PAT）或该仓库 `Contents: Read & Write` 的 PAT，
-   用临时环境变量注入后执行 `git push -u origin ca-switch`（凭据不写入仓库配置）。
+1. 重新生成一枚有效 PAT：classic PAT（`ghp_`）勾 `repo`；或 fine-grained PAT 选
+   `forlzc/cc-switch` 仓库 + `Contents: Read & Write`，确认已生效并完整复制；
+2. 或在 CodeBuddy 设置 → 连接器 重新授权 GitHub，确保授予目标仓库 Contents 读写。
+
+凭据均用临时环境变量注入，执行 `git push -u origin ca-switch`，不写入仓库配置。
+
+> 🔒 已明文出现在对话中的那枚 PAT 建议立即在 GitHub 设置里撤销：GitHub 会扫描泄露的
+> 密钥并可能自动令其失效，明文令牌也不宜再次使用。
 
 > ⚠️ 本地 `ca-switch` 原本仍跟踪 `origin/fork/build`（历史遗留），无参数 `git push` 会推到
 > CI 构建分支。已把 `branch.ca-switch.merge` 预先改指 `refs/heads/ca-switch`，避免误推；
