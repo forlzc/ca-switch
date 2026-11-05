@@ -160,7 +160,29 @@ P0–P1 与 P2 的 **2a、2b-1、2e（含 2d）、2b-2** 已全部落地并逐�
 | 5 张已下线表 | v25 未删 | 2f 删 |
 | 前端构建未验证 | 本轮只跑后端 | 2f 补 |
 | 命名不一致 | 分支 `ca-switch` vs 产品名 `caswitch` | P5 前确认 |
-| 远程分支策略 | 本轮 push 新建 `origin/ca-switch`；`origin/fork/build` **未同步** | 若需 CI 基于新分支构建，另行确认 |
+| 远程分支策略 | 分支已本地改名 `ca-switch`、文档提交 `bcf542ce`；推送 `origin/ca-switch` **未完成** | 见下方「推送阻塞记录」 |
+
+### 推送阻塞记录（2026-11-05）
+
+本地部分已全部完成：分支 `caswitch` → `ca-switch`、进度文档提交、工作区干净。
+推送到 `origin/ca-switch` 被阻，**根因是凭据类型，不是代码或网络**：
+
+- 系统 GitHub 连接器发放的是 GitHub App 用户令牌（`ghu_` 前缀）。REST 查询
+  `GET /repos/forlzc/cc-switch` 返回 `permissions.push = true`，但用该令牌做 git HTTPS 写操作
+  一律返回 `remote: Permission to forlzc/cc-switch.git denied to forlzc`（403）。
+  `oauth2` / `x-access-token` 用户名、URL 内嵌凭据三种方式均试过，结果一致。
+- 另有间歇性的 `github.com:443` 连接超时（`api.github.com` 始终可用，属沙箱网络波动）；
+  其中一次连接成功并返回 403，足以排除纯网络原因。
+
+**解除方式（二选一）**：
+
+1. 在 CodeBuddy 设置 → 连接器 重新授权 GitHub，确保授予目标仓库 Contents 读写；
+2. 提供一枚有 `repo`（classic PAT）或该仓库 `Contents: Read & Write` 的 PAT，
+   用临时环境变量注入后执行 `git push -u origin ca-switch`（凭据不写入仓库配置）。
+
+> ⚠️ 本地 `ca-switch` 原本仍跟踪 `origin/fork/build`（历史遗留），无参数 `git push` 会推到
+> CI 构建分支。已把 `branch.ca-switch.merge` 预先改指 `refs/heads/ca-switch`，避免误推；
+> `origin/fork/build` 全程未改动。若确实需要让 CI 基于新分支构建，请单独确认。
 
 ---
 
