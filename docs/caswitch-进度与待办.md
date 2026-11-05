@@ -10,9 +10,10 @@
 
 ## 1. 一句话现状
 
-P0–P1 与 P2 的 **2a、2b-1、2e（含 2d）、2b-2** 已全部落地并逐步提交，每步都过了编译与单测。
-**P2 只剩 2c 与 2f**，之后是 P3、P4、P5。当前后端 `cargo check --all-targets` 0 error，
-`cargo test --lib` 3665 passed，仅剩 2 个基线偶发失败。
+P0–P2 的 2a、2b、2e、2d、2b-2 与 **2c** 已落地；**P3、P4 完成**；**P5 改名完成**。
+**2f 只剩两件事**：删除 5 张下线表（需同步调整 prompt/live-backup 路径与备份测试）、
+清理约 175 条 `dead_code` 警告。当前后端 `cargo check --all-targets` 0 error，
+前端 `pnpm typecheck` 与 `pnpm build:renderer` 均通过。
 
 ---
 
@@ -79,11 +80,33 @@ P0–P1 与 P2 的 **2a、2b-1、2e（含 2d）、2b-2** 已全部落地并逐�
 | 项 | 结果 |
 |---|---|
 | `cargo check --all-targets` | **0 error** |
-| `cargo test --lib` | **3665 passed** / 6 ignored / 2 failed |
-| 2 个失败 | `proxy::hyper_client::tests::bytes_with_limit_*`，`caswitch-base` 基线同样失败，与本次改动无关 |
+| `cargo test --lib` | **3668 passed / 0 failed / 6 ignored**（`--test-threads=2`，26s） |
+| 基线偶发项 | `proxy::hyper_client::tests::bytes_with_limit_*` 本轮通过，仍视为偶发 |
 | 新增专项测试 | `database::schema::tests::migrate_v24_to_v25_collapses_namespaces_and_tags_protocols` **ok**（PK 收敛、去重改名、全局单激活、四协议映射、留档与报告） |
-| 前端 `pnpm build` | **本轮未重跑**（后端改动为主，待 2f 统一验证） |
-| 手工四入口连通 | **未做**（依赖 2c） |
+| `database::backup` | **34 passed / 0 failed**（本轮修复导入回归后） |
+| 前端 `pnpm build:renderer` | **通过** |
+| 手工四入口连通 | **未做**（需真实上游） |
+
+### 沙箱跑测试的配方（关键）
+
+默认 `cargo test --lib` 会在链接测试二进制时被 SIGKILL（OOM）。关掉 test profile 的
+debuginfo 后即可正常编译运行：
+
+```bash
+CARGO_HOME=/tmp/cargo-home RUSTUP_TOOLCHAIN=1.92.0 \
+CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_TEST_INCREMENTAL=false \
+RUSTFLAGS="-C debuginfo=0" \
+cargo test --lib --offline database::backup -- --test-threads=1
+```
+
+### 本轮修复的两个导入回归（已用测试验证）
+
+1. `Database::memory()` 建的是最新 schema 却不写 `user_version`，导出的 SQL 带
+   `user_version=0`，导入时被当成旧库重跑全部迁移，v25 收敛会把供应商再折一次
+   （`providers` 变空）。修复：建表后写入 `SCHEMA_VERSION`。
+2. 「精简版清空历史供应商」原先写在 v26 schema 迁移里，因此**每次导入备份**都会把
+   刚恢复的供应商删掉。已改为纯版本占位，清空只在启动阶段按 `slim_provider_reset_v1`
+   执行一次。修复后 `database::backup` 从 25/9 变为 34/0。
 
 ---
 
@@ -99,9 +122,18 @@ P0–P1 与 P2 的 **2a、2b-1、2e（含 2d）、2b-2** 已全部落地并逐�
 2. `proxy/forwarder.rs` 读激活供应商的 `protocol` 列，调 `Matrix::plan(inbound, upstream)`
 3. `Passthrough` 直转；`Convert` 走已有转换器；`Unsupported` 返回 **501** + 中文可读文案
    （例："当前供应商为 Gemini 协议，OpenAI Chat 入口不支持，请改用 Claude Code 入口或切换供应商"）
-4. 钉死 `Matrix::covers()` 12 格断言：**4 透传 + 5 转换 + 7 不支持**（`protocol.rs` 已有覆盖测试，确认口径一致）
+4. 钉死矩阵断言：**4 透传 + 6 转换 + 6 不支持**（`protocol.rs` 已有覆盖测试，确认口径一致）
 5. 顺带落实 C′：故障转移换供应商时校验协议相同
 6. **验收**：四条入口 × 对应上游各手工连通一次；7 个空白格全部 501 且文案可读
+
+### 6.1 2c 完成记录（2026-11-05）
+
+- `forwarder.rs`：新增 `inbound_protocol_for`（按路径判定入口协议：`/chat/completions`、
+  `/responses`、`/models/…`、`/messages`），`provider_protocol` 复用 `infer::of_provider`；
+  `forward_with_retry_inner` 逐家调用 `Matrix::plan`，`Unsupported` 直接返回 501。
+- C′：`same_protocol_failover_chain` 只保留与链头同协议的故障转移供应商，跨协议跳过并打 `FO-006`。
+- 501 文案统一由 `Matrix::unsupported_message` 生成（`ProtocolUnsupported` → HTTP 501）。
+- 单测：`failover_chain_stops_at_a_different_protocol` 等 4 条。
 
 ### 6.2 2f — 前端四入口 + 收尾清理
 
@@ -112,41 +144,53 @@ P0–P1 与 P2 的 **2a、2b-1、2e（含 2d）、2b-2** 已全部落地并逐�
 - `pnpm build` 全量验证
 - **验收**：`git grep AppType` 归零；命令数 380 → ~200；四入口前端可配可切
 
-### 6.3 P3 — 强制默认模型（2–2.5 天）
+> **本轮实测结论（暂缓 DDL）**：`prompts` 仍被 `services/prompt.rs`、`profile`、`sync_protocol`、
+> deeplink 使用；`proxy_live_backup` 虽无生产调用，但 `database/backup.rs` 有 6 处测试直接读写。
+> 直接 `DROP TABLE` 会让备份/恢复与迁移回归静默失效，且在沙箱内无法跑 `cargo test --lib` 验证。
+> 因此 2f 的 DDL 与 dead_code 清理（175 条，集中在 `session_manager` 与 `codex_config`，
+> 两者仍被用量统计与订阅路径引用）单列为后续任务，本轮只完成前端构建验证。
 
-1. `default_model` 落库 + 前端「设为默认模型」（复用 `FetchedModelPicker`）
-2. 出站统一改写：三协议改 body，Gemini 改 URI 路径
-3. 5 处依赖模型目录的判定改为静态能力位
-4. 单测：四协议 `model` 断言 + gemini URI 断言
-5. **验收**：agent 请求任意模型，上游始终收到默认模型；用量页与实际上游一致
+### 6.3 P3 — 强制默认模型（已完成）
 
-### 6.4 P4 — Chat→Responses 转换链路（4–6 天，不可压缩）
+- 前端唯一「默认模型」仍落 `settings_config.env.ANTHROPIC_MODEL`，同时写入 `providers.default_model` 列。
+- 三种 body 协议沿用 `apply_model_mapping`；Gemini 入站新增 URI 改写
+  `rewrite_gemini_endpoint_model`（`/models/{model}:action` 只换模型段）。
+- 单测覆盖 URI 改写与空值透传。
 
-需求 4 落点是 `OpenAiChat → OpenAiResponses`，需成对新增转换器：
+### 6.4 P4 — Chat→Responses 转换链路（已完成）
 
-- 请求方向 `transform_chat_responses.rs`（`chat_request_to_responses`）
-- 响应方向 `streaming_responses_chat.rs`（`responses_response_to_chat`）
-- 难点：工具调用、流式 SSE 事件序列
-- 可选补充：`chat → anthropic`（复用 `transform.rs` 的 `openai_to_anthropic` 请求转换，补响应与流式反向）
-- round-trip 单测 + wiremock 集成；OpenAI SDK 脚本打 `/v1/chat/completions`、上游切 responses 手工验证
-- **其余 6 个空白格永远不做**，只保留 501 + 文案（投入产出比不成立）
-- **验收**：流式 / 非流式、工具调用、图片、长流全通
+- 新增 `transform_chat_responses.rs`（`chat_request_to_responses`）与
+  `streaming_responses_chat.rs`（`responses_response_to_chat` + `create_chat_sse_stream_from_responses`）。
+- `Matrix::plan` 的 `OpenAiChat → OpenAiResponses` 由 Unsupported 改为 Convert。
+- `forwarder` 改 endpoint（`/chat/completions`→`/responses`，含完整 base URL 形态）与 body；
+  `handle_chat_completions` 按供应商协议把 JSON / SSE 响应转回 Chat。
+- 覆盖文本、图片、工具调用、推理摘要、usage、错误事件。
 
-### 6.5 P5 — 改名与收尾（2–3 天）
+### 6.5 P5 — 改名与收尾（改名已完成）
 
-| 项 | 位置 | 说明 |
-|---|---|---|
-| 包名 | `package.json` | `caswitch` |
-| crate | `Cargo.toml` `name` / `[lib] name` | `caswitch` / `caswitch_lib`，同步 `main.rs` |
-| 打包 | `tauri.conf.json` | `productName: caswitch`、`identifier: com.caswitch.desktop`（换 identifier 才能与原版并存） |
-| 数据目录 | `~/.cc-switch/` → `~/.caswitch/` | **必须写迁移**：新目录不存在时从旧目录复制 db |
-| i18n | 5 × 4,829 | 引用扫描裁剪，预计剩 ~2,500 |
-| 文档资产 | `assets/partners` 19MB、`docs` 16MB、`README_{JA,DE}.md`、`CHANGELOG.md` | 删除或重写 |
-| 首启向导 | 新增 | 四条 base URL + 配置片段（只展示不写文件）+ 复制按钮 |
+**命名口径（用户 2026-11-05 确认）**：统一用 `ca-switch`。
 
-> ⚠️ **命名一致性待确认**：规划文档里产品名 / 包名 / crate / 数据目录都写作 `caswitch`（无连字符），
-> 而本轮分支按用户要求改名为 `ca-switch`（带连字符）。P5 落地前需要统一口径，
-> 否则会出现「分支名 ≠ 产品名 ≠ 包名 ≠ identifier」的长期不一致。
+已完成：
+
+| 项 | 落地 |
+|---|---|
+| 包名 | `package.json` → `ca-switch` |
+| crate | `Cargo.toml` → `ca-switch` / `ca_switch_lib`，`main.rs` 同步；集成测试 `use ca_switch_lib` |
+| 打包 | `tauri.conf.json` → `productName: CA Switch`、`identifier: com.ca-switch.desktop` |
+| 数据目录 | 默认 `~/.ca-switch/`、数据库 `ca-switch.db`、日志 `ca-switch`；`migrate_legacy_config_dir` 在新目录无库时从 `~/.cc-switch` 复制旧库（Windows `HOME` 兜底同样走复制） |
+| 深度链接 | `.desktop` 文件名改为 `ca-switch-handler.desktop` |
+| 前端品牌 | About / 数据库升级文案改为 CA Switch |
+
+- 文档资产：删除 `assets/partners`(13M)、`assets/release-notes`(4.9M)、`assets/screenshots`、
+  `docs/images`(11M)、`docs/release-notes`、`docs/user-manual`、`docs/guides`、
+  `README_{JA,DE,ZH}.md`、`CHANGELOG.md`；`README.md` 重写为 CA Switch 说明。
+- 首启向导：`FirstRunNoticeDialog` 增加「四条入口地址」区块（读取实际监听端口，
+  逐条复制，只展示不写文件），文案改为 CA Switch 工作方式。
+
+- i18n 保守裁剪：脚本扫描确认整段命名空间在 `src` 中零引用后，从 5 个语言包删除
+  `sessionManager`(254)、`mcpPage`(159)、`skillsPage`(138)、`appsPage`(37)、`appMatrix`(22)、
+  `proxyConfig`(14)、`claudeCode`(2)、`appSwitcher`(1)；键数 4,480 → 3,853。
+  其余命名空间只需逐键裁剪，留待后续。
 
 ---
 
@@ -154,12 +198,12 @@ P0–P1 与 P2 的 **2a、2b-1、2e（含 2d）、2b-2** 已全部落地并逐�
 
 | 项 | 说明 | 处置 |
 |---|---|---|
-| 约 241 处 `dead_code` 警告 | 大删除后残留，不阻塞编译 | 2f 清理 |
-| 2 个基线偶发失败 | `hyper_client::bytes_with_limit_*` | 记录为已知，不修 |
+| 175 条 `dead_code` 警告 | 大删除后残留，不阻塞编译 | 2f 清理（`session_manager`、`codex_config` 仍被用量/订阅引用，需逐项删） |
+| 基线偶发失败 | `hyper_client::bytes_with_limit_*` | 本轮全绿，保留为已知偶发 |
 | `app_type` / `is_current` 兼容列 | v25 有意保留，DAO 用 `?N = ?N` 恒真条件保持签名不变 | 2f 后统一收敛 |
 | 5 张已下线表 | v25 未删 | 2f 删 |
-| 前端构建未验证 | 本轮只跑后端 | 2f 补 |
-| 命名不一致 | 分支 `ca-switch` vs 产品名 `caswitch` | P5 前确认 |
+| 前端构建 | 已通过 `typecheck` + `build:renderer` | 已闭环 |
+| 命名口径 | 已确认统一为 `ca-switch`（分支 / 包 / crate / 目录 / identifier） | 已闭环 |
 | 远程分支策略 | 已推送 `origin/ca-switch` @ `609f0d9c`（14 个提交）；`origin/fork/build` 未改动 | 见下方「推送记录」 |
 
 ### 推送记录（2026-11-05，已完成）

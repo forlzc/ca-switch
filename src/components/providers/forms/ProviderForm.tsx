@@ -64,7 +64,6 @@ import { OpenClawFormFields } from "./OpenClawFormFields";
 import { HermesFormFields } from "./HermesFormFields";
 import type { UniversalProviderPreset } from "@/config/universalProviderPresets";
 import {
-  applyTemplateValues,
   getApiKeyFromConfig,
   hasApiKeyField,
 } from "@/utils/providerConfigUtils";
@@ -82,7 +81,6 @@ import { CommonConfigEditor } from "./CommonConfigEditor";
 import GeminiConfigEditor from "./GeminiConfigEditor";
 import JsonEditor from "@/components/JsonEditor";
 import { Label } from "@/components/ui/label";
-import { ProviderPresetSelector } from "./ProviderPresetSelector";
 import { BasicFormFields } from "./BasicFormFields";
 import { ClaudeFormFields } from "./ClaudeFormFields";
 import {
@@ -97,7 +95,6 @@ import {
   type ClaudeStackModelRow,
 } from "./ClaudeStackModelsField";
 import { setClaudeOneMMarker } from "./hooks/useModelState";
-import { useAppMode } from "@/lib/query/proxy";
 import { ClaudeDesktopProviderForm } from "./ClaudeDesktopProviderForm";
 import { GrokBuildProviderForm } from "./GrokBuildProviderForm";
 import { CodexFormFields } from "./CodexFormFields";
@@ -357,8 +354,6 @@ function ProviderFormFull({
   submitLabel,
   onSubmit,
   onCancel,
-  onUniversalPresetSelect,
-  onManageUniversalProviders,
   onManageAuthAccounts,
   onSubmittingChange,
   initialData,
@@ -367,7 +362,6 @@ function ProviderFormFull({
   inactiveFields,
   claudeLiveBase,
   onEditorBaseChange,
-  modeView,
   onStackLayoutChange,
 }: ProviderFormProps) {
   if (appId === "claude-desktop") {
@@ -755,20 +749,8 @@ function ProviderFormFull({
     }
   };
 
-  // 聚合模式下 Claude Code / Codex 的第三方供应商用简化面板（连接 + 模型列表 + 高级）；
-  // 两种布局共用同一份表单状态，完整表单从直连 / 路由那格打开。
-  const { data: appModeView } = useAppMode(
-    appId,
-    appId === "claude" || appId === "codex",
-  );
-  // 应用实际在直连时，非原生上游格式发不出请求：正在直连用的这张卡一保存就坏，别的卡切不过去。
-  // 按实际模式判断，不看从哪一格打开。
-  const directModeFormatNotice: DirectModeFormatNotice | undefined =
-    appModeView?.mode === "direct"
-      ? providerId && providerId === appModeView.directProviderId
-        ? "inUse"
-        : "switch"
-      : undefined;
+  // 精简后只有路由模式，也没有聚合布局。
+  const directModeFormatNotice: DirectModeFormatNotice | undefined = undefined;
 
   const {
     codexAuth,
@@ -926,25 +908,6 @@ function ProviderFormFull({
     form.reset(defaultValues);
   }, [defaultValues, form]);
 
-  const presetCategoryLabels: Record<string, string> = useMemo(
-    () => ({
-      official: t("providerForm.categoryOfficial", {
-        defaultValue: "官方",
-      }),
-      cn_official: t("providerForm.categoryCnOfficial", {
-        defaultValue: "国内官方",
-      }),
-      aggregator: t("providerForm.categoryAggregation", {
-        defaultValue: "聚合服务",
-      }),
-      third_party: t("providerForm.categoryThirdParty", {
-        defaultValue: "第三方",
-      }),
-      omo: "OMO",
-    }),
-    [t],
-  );
-
   const presetEntries = useMemo(() => {
     // 先编号再过滤 hidden：id 里的序号是原数组下标，AddProviderDialog /
     // useProviderCategory 按它回查预设，先过滤会让隐藏项之后的预设全部错位
@@ -1022,12 +985,7 @@ function ProviderFormFull({
         selectedPresetEntry?.preset.category === "official"));
   const isCodexOfficialManagedOauthBound =
     isCodexOfficialProvider && Boolean(selectedCodexAccountId);
-  // 在聚合那格打开（没给就看应用实际是否在聚合模式）时，新增 / 编辑用聚合的简化表单
-  const useStackLayout =
-    (modeView ?? appModeView?.mode) === "stack" &&
-    (appId === "claude" || appId === "codex") &&
-    category !== "official" &&
-    !isCodexOfficialProvider;
+  const useStackLayout = false;
   useEffect(() => {
     onStackLayoutChange?.(useStackLayout);
     return () => onStackLayoutChange?.(false);
@@ -2248,216 +2206,6 @@ function ProviderFormFull({
     initialData,
   });
 
-  const handlePresetChange = (value: string) => {
-    setSelectedPresetId(value);
-    // Stack 模型是这家自己的：换预设后回到跟着新预设的模型映射。
-    setClaudeStackRows(null);
-    if (value === "custom") {
-      setActivePreset(null);
-      form.reset(defaultValues);
-
-      if (appId === "codex") {
-        const template = getCodexCustomTemplate();
-        resetCodexConfig(template.auth, template.config);
-        setCodexChatReasoning({});
-        setPromptCacheRouting("auto");
-        setCodexCopilotApiFormat("auto");
-        setLocalCodexApiFormat(
-          codexApiFormatFromWireApi(extractCodexWireApi(template.config)) ??
-            "openai_responses",
-        );
-        projectCodexDraft(template.auth, template.config);
-      }
-      if (usesGeminiStyleForm(appId)) {
-        resetGeminiConfig({}, {});
-        projectGeminiDraft({}, {});
-      }
-      if (appId === "opencode") {
-        opencodeForm.resetOpencodeState();
-        omoDraft.resetOmoDraftState();
-      }
-      // OpenClaw 自定义模式：重置为空配置
-      if (appId === "openclaw") {
-        openclawForm.resetOpenclawState();
-      }
-      if (appId === "hermes") {
-        hermesForm.resetHermesState();
-      }
-      return;
-    }
-
-    const entry = presetEntries.find((item) => item.id === value);
-    if (!entry) {
-      return;
-    }
-
-    setActivePreset({
-      id: value,
-      category: entry.preset.category,
-      isPartner: entry.preset.isPartner,
-      partnerPromotionKey: entry.preset.partnerPromotionKey,
-    });
-
-    if (appId === "codex") {
-      const preset = entry.preset as CodexProviderPreset;
-      const auth = preset.auth ?? {};
-      const config = preset.config ?? "";
-
-      resetCodexConfig(auth, config, preset.modelCatalog ?? []);
-      setCodexChatReasoning(preset.codexChatReasoning ?? {});
-      setPromptCacheRouting(preset.promptCacheRouting ?? "auto");
-      setCodexCopilotApiFormat("auto");
-      setLocalCodexApiFormat(
-        preset.apiFormat ??
-          codexApiFormatFromWireApi(extractCodexWireApi(config)) ??
-          "openai_responses",
-      );
-
-      form.reset({
-        name: preset.nameKey ? t(preset.nameKey) : preset.name,
-        websiteUrl: preset.websiteUrl ?? "",
-        settingsConfig: JSON.stringify({ auth, config }, null, 2),
-        icon: preset.icon ?? "",
-        iconColor: preset.iconColor ?? "",
-      });
-      // Preset selection resets Copilot to auto; do not reuse the previous render's metadata.
-      projectCodexDraft(
-        auth,
-        config,
-        preset.category,
-        preset.providerType === "github_copilot"
-          ? { providerType: preset.providerType }
-          : undefined,
-      );
-      return;
-    }
-
-    if (usesGeminiStyleForm(appId)) {
-      const preset = entry.preset as GeminiProviderPreset;
-      const env = (preset.settingsConfig as any)?.env ?? {};
-      const config = (preset.settingsConfig as any)?.config ?? {};
-
-      resetGeminiConfig(env, config);
-
-      form.reset({
-        name: preset.nameKey ? t(preset.nameKey) : preset.name,
-        websiteUrl: preset.websiteUrl ?? "",
-        settingsConfig: JSON.stringify(preset.settingsConfig, null, 2),
-        icon: preset.icon ?? "",
-        iconColor: preset.iconColor ?? "",
-      });
-      projectGeminiDraft(env, config, preset.category);
-      return;
-    }
-
-    if (appId === "opencode") {
-      const preset = entry.preset as OpenCodeProviderPreset;
-      const config = preset.settingsConfig;
-
-      if (preset.category === "omo" || preset.category === "omo-slim") {
-        omoDraft.resetOmoDraftState();
-        form.reset({
-          name: preset.category === "omo" ? "OMO" : "OMO Slim",
-          websiteUrl: preset.websiteUrl ?? "",
-          settingsConfig: JSON.stringify({}, null, 2),
-          icon: preset.icon ?? "",
-          iconColor: preset.iconColor ?? "",
-        });
-        return;
-      }
-
-      opencodeForm.resetOpencodeState(config);
-
-      form.reset({
-        name: preset.nameKey ? t(preset.nameKey) : preset.name,
-        websiteUrl: preset.websiteUrl ?? "",
-        settingsConfig: JSON.stringify(config, null, 2),
-        icon: preset.icon ?? "",
-        iconColor: preset.iconColor ?? "",
-      });
-      return;
-    }
-
-    // OpenClaw preset handling
-    if (appId === "openclaw") {
-      const preset = entry.preset as OpenClawProviderPreset;
-      const config = preset.settingsConfig;
-
-      // Update activePreset with suggestedDefaults for OpenClaw
-      setActivePreset({
-        id: value,
-        category: preset.category,
-        isPartner: preset.isPartner,
-        partnerPromotionKey: preset.partnerPromotionKey,
-        suggestedDefaults: preset.suggestedDefaults,
-      });
-
-      openclawForm.resetOpenclawState(config);
-
-      // Update form fields
-      form.reset({
-        name: preset.nameKey ? t(preset.nameKey) : preset.name,
-        websiteUrl: preset.websiteUrl ?? "",
-        settingsConfig: JSON.stringify(config, null, 2),
-        icon: preset.icon ?? "",
-        iconColor: preset.iconColor ?? "",
-      });
-      return;
-    }
-
-    // Hermes preset handling
-    if (appId === "hermes") {
-      const preset = entry.preset as HermesProviderPreset;
-      const config = preset.settingsConfig;
-
-      hermesForm.resetHermesState(config, preset.providerKey);
-
-      form.reset({
-        name: preset.nameKey ? t(preset.nameKey) : preset.name,
-        websiteUrl: preset.websiteUrl ?? "",
-        settingsConfig: JSON.stringify(config, null, 2),
-        icon: preset.icon ?? "",
-        iconColor: preset.iconColor ?? "",
-      });
-      return;
-    }
-
-    const preset = entry.preset as ProviderPreset;
-    const templated = applyTemplateValues(
-      preset.settingsConfig,
-      preset.templateValues,
-    );
-    // 预设只带关键字段和独有字段，套在当前 live 上显示（和切换的结果一致）。
-    const config =
-      appId === "claude"
-        ? overlayClaudeProviderFields(
-            claudeLiveBase ?? {},
-            withClaudeGatewayDefaults(
-              templated as Record<string, unknown>,
-              preset.category,
-            ),
-          )
-        : templated;
-
-    if (preset.apiFormat) {
-      setLocalApiFormat(preset.apiFormat);
-    } else {
-      setLocalApiFormat("anthropic");
-    }
-    setClaudeReasoningEffort("auto");
-
-    setLocalApiKeyField(preset.apiKeyField ?? "ANTHROPIC_AUTH_TOKEN");
-    setLocalIsFullUrl(false);
-
-    form.reset({
-      name: preset.nameKey ? t(preset.nameKey) : preset.name,
-      websiteUrl: preset.websiteUrl ?? "",
-      settingsConfig: JSON.stringify(config, null, 2),
-      icon: preset.icon ?? "",
-      iconColor: preset.iconColor ?? "",
-    });
-  };
-
   const settingsConfigErrorField = (
     <FormField
       control={form.control}
@@ -2478,18 +2226,6 @@ function ProviderFormFull({
           onSubmit={form.handleSubmit(handleSubmit)}
           className="space-y-6"
         >
-          {!initialData && (
-            <ProviderPresetSelector
-              selectedPresetId={selectedPresetId}
-              presetEntries={presetEntries}
-              presetCategoryLabels={presetCategoryLabels}
-              onPresetChange={handlePresetChange}
-              onUniversalPresetSelect={onUniversalPresetSelect}
-              onManageUniversalProviders={onManageUniversalProviders}
-              category={category}
-            />
-          )}
-
           <BasicFormFields
             form={form}
             beforeNameSlot={

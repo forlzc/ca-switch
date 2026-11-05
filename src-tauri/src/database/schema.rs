@@ -683,6 +683,11 @@ impl Database {
                         Self::migrate_v24_to_v25(conn)?;
                         Self::set_user_version(conn, 25)?;
                     }
+                    25 => {
+                        log::info!("迁移数据库从 v25 到 v26（版本占位；供应商清空在启动阶段执行）");
+                        Self::migrate_v25_to_v26(conn)?;
+                        Self::set_user_version(conn, 26)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -706,6 +711,16 @@ impl Database {
                 Err(e)
             }
         }
+    }
+
+    /// v25 → v26：版本号占位。
+    ///
+    /// 「精简版一次性清空历史供应商」放在应用启动时按 `slim_provider_reset_v1`
+    /// 标记执行（`lib.rs`），不能写进 schema 迁移：迁移同样会在**导入备份**和
+    /// 每一条历史迁移测试里跑，放在这里会把刚恢复的供应商整表删掉（v3.8 备份
+    /// 回归测试即因此红掉）。schema 层只保留版本推进。
+    fn migrate_v25_to_v26(_conn: &Connection) -> Result<(), AppError> {
+        Ok(())
     }
 
     /// v24 → v25：providers 收敛为 `id` 主键 + `protocol` + 全局单激活；
@@ -4515,7 +4530,11 @@ mod tests {
 
         Database::apply_schema_migrations_on_conn(&conn)?;
 
-        assert_eq!(Database::get_user_version(&conn)?, 25);
+        assert_eq!(
+            Database::get_user_version(&conn)?,
+            crate::database::SCHEMA_VERSION,
+            "迁移必须一路推进到当前 schema 版本（v26 起为版本占位）"
+        );
         let legacy: i64 =
             conn.query_row("SELECT COUNT(*) FROM providers_legacy", [], |r| r.get(0))?;
         assert_eq!(legacy, 3, "旧表整体留档");

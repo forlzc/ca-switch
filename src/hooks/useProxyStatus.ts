@@ -162,37 +162,6 @@ export function useProxyStatus() {
     },
   });
 
-  // 设置里在路由和 Stack 之间换时：处于另一种模式的 Claude Code、Codex 先退回直连
-  const exitAppsInModeMutation = useMutation({
-    mutationFn: (stack: boolean) => proxyApi.exitProxyAppsInMode(stack),
-    onSuccess: (apps) => {
-      if (apps.length > 0) {
-        toast.success(
-          t("proxy.stackMode.exitedToDirect", {
-            apps: apps.map(getAppLabel).join(" / "),
-          }),
-          { closeButton: true },
-        );
-      }
-      queryClient.invalidateQueries({ queryKey: proxyKeys.status });
-      queryClient.invalidateQueries({ queryKey: proxyKeys.takeoverStatus });
-      for (const app of apps) {
-        queryClient.invalidateQueries({ queryKey: ["providers", app] });
-      }
-    },
-    onError: (error: Error) => {
-      const detail =
-        extractErrorMessage(error) ||
-        t("common.unknown", { defaultValue: "未知错误" });
-      toast.error(
-        t("proxy.takeover.failed", {
-          detail,
-          defaultValue: `操作失败: ${detail}`,
-        }),
-      );
-    },
-  });
-
   return {
     status,
     isRunning: status?.running || false,
@@ -206,8 +175,6 @@ export function useProxyStatus() {
 
     // 按应用接管开关
     setTakeoverForApp: setTakeoverForAppMutation.mutateAsync,
-    exitAppsInMode: exitAppsInModeMutation.mutateAsync,
-
     // 加载状态
     isStarting: startProxyServerMutation.isPending,
     isStoppingServer: stopProxyServerMutation.isPending,
@@ -215,7 +182,7 @@ export function useProxyStatus() {
       startProxyServerMutation.isPending ||
       stopProxyServerMutation.isPending ||
       stopWithRestoreMutation.isPending ||
-      setTakeoverForAppMutation.isPending ||
-      exitAppsInModeMutation.isPending,
+      setTakeoverForAppMutation.isPending,
+
   };
 }

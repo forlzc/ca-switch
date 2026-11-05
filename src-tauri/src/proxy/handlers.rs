@@ -27,6 +27,9 @@ use super::{
         },
         streaming_codex_chat::create_responses_sse_stream_from_chat_with_context,
         streaming_gemini::create_anthropic_sse_stream_from_gemini,
+        streaming_responses_chat::{
+            create_chat_sse_stream_from_responses, responses_response_to_chat,
+        },
         streaming_responses::{
             create_anthropic_sse_stream_from_responses,
             create_anthropic_sse_stream_from_responses_with_web_search_options,
@@ -902,12 +905,113 @@ pub async fn handle_chat_completions(
     ctx.provider = result.provider;
     let response = result.response;
 
+    // P4：Chat 入口 × Responses 上游，forwarder 已把请求改成 Responses 形状，
+    // 这里把 Responses 响应（JSON / SSE）转回 Chat 形状再交给通用处理。
+    if super::forwarder::provider_protocol(&AppType::Codex, &ctx.provider)
+        == crate::protocol::Protocol::OpenAiResponses
+    {
+        return handle_chat_responses_to_chat_transform(
+            response,
+            &ctx,
+            &state,
+            is_stream,
+            connection_guard,
+        )
+        .await;
+    }
+
     process_response(
         response,
         &ctx,
         &state,
         &OPENAI_PARSER_CONFIG,
         is_stream,
+        connection_guard,
+    )
+    .await
+}
+
+/// Chat 入口 × Responses 上游的响应转换。
+async fn handle_chat_responses_to_chat_transform(
+    response: super::hyper_client::ProxyResponse,
+    ctx: &RequestContext,
+    state: &ProxyState,
+    is_stream: bool,
+    connection_guard: Option<ActiveConnectionGuard>,
+) -> Result<axum::response::Response, ProxyError> {
+    let status = response.status();
+
+    if !status.is_success() {
+        // 错误体沿用通用处理：OpenAI 系上游的 error 形状对 Chat 客户端可读。
+        return process_response(
+            response,
+            ctx,
+            state,
+            &OPENAI_PARSER_CONFIG,
+            is_stream,
+            connection_guard,
+        )
+        .await;
+    }
+
+    if is_stream || response.is_sse() {
+        let builder = rewritten_sse_response_builder(status, response.headers());
+        let chat_stream = create_chat_sse_stream_from_responses(response.bytes_stream());
+        let usage_collector =
+            create_usage_collector(ctx, state, status.as_u16(), &OPENAI_PARSER_CONFIG);
+        let logged_stream = create_logged_passthrough_stream(
+            chat_stream,
+            ctx.tag,
+            usage_collector,
+            ctx.streaming_timeout_config(),
+            connection_guard,
+        );
+        return builder.body(axum::body::Body::from_stream(logged_stream)).map_err(|e| {
+            log::error!("[{}] 构建 Chat←Responses 流式响应失败: {e}", ctx.tag);
+            ProxyError::Internal(format!("Failed to build streaming response: {e}"))
+        });
+    }
+
+    let body_timeout =
+        if ctx.app_config.auto_failover_enabled && ctx.app_config.non_streaming_timeout > 0 {
+            std::time::Duration::from_secs(ctx.app_config.non_streaming_timeout as u64)
+        } else {
+            std::time::Duration::ZERO
+        };
+    let (mut response_headers, status, body_bytes) =
+        read_decoded_body(response, ctx.tag, body_timeout).await?;
+    let fallback_model = ctx
+        .outbound_model
+        .clone()
+        .unwrap_or_else(|| ctx.request_model.clone());
+    let converted = match serde_json::from_slice::<Value>(&body_bytes) {
+        Ok(value) => responses_response_to_chat(&value, Some(&fallback_model)),
+        // 上游返回的不是 JSON：原样透传，避免把可读错误吞掉。
+        Err(_) => {
+            return Ok(axum::response::Response::builder()
+                .status(status)
+                .body(axum::body::Body::from(body_bytes))
+                .map_err(|e| ProxyError::Internal(format!("Failed to build response: {e}")))?);
+        }
+    };
+    let converted_bytes = Bytes::from(
+        serde_json::to_vec(&converted)
+            .map_err(|e| ProxyError::Internal(format!("Failed to serialize response: {e}")))?,
+    );
+    strip_entity_headers_for_rebuilt_body(&mut response_headers);
+    response_headers.remove(axum::http::header::CONTENT_TYPE);
+
+    let rebuilt = super::hyper_client::ProxyResponse::buffered(
+        status,
+        response_headers,
+        converted_bytes,
+    );
+    process_response(
+        rebuilt,
+        ctx,
+        state,
+        &OPENAI_PARSER_CONFIG,
+        false,
         connection_guard,
     )
     .await
@@ -2361,6 +2465,7 @@ fn codex_proxy_error_code(error: &ProxyError) -> &'static str {
         ProxyError::UpstreamError { .. } => "cc_switch_upstream_error",
         ProxyError::DatabaseError(_) => "cc_switch_database_error",
         ProxyError::Internal(_) => "cc_switch_internal_error",
+        ProxyError::ProtocolUnsupported(_) => "cc_switch_protocol_unsupported",
         ProxyError::AlreadyRunning
         | ProxyError::NotRunning
         | ProxyError::BindFailed(_)

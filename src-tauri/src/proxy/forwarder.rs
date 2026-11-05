@@ -32,6 +32,7 @@ use crate::proxy::providers::copilot_model_map::{
     CopilotProtocol, CopilotTransport, ResolvedCopilotModel,
 };
 use crate::proxy::providers::xai_oauth_auth::XaiOAuthManager;
+use crate::protocol::{Conversion, Matrix, Protocol};
 use crate::{
     app_config::AppType,
     provider::{CodexCopilotApiFormat, LocalProxyRequestOverrides, Provider},
@@ -47,6 +48,60 @@ use tauri::Manager;
 use tokio::sync::RwLock;
 
 const PROXY_AUTH_PLACEHOLDER: &str = "PROXY_MANAGED";
+
+/// 入口协议：由请求路径决定，路径信息不足时才退回客户端家族。
+///
+/// 同一个客户端入口可能同时提供多种路径（Codex 既有 `/v1/responses`，
+/// 也兼容 `/v1/chat/completions`），所以不能只看 `AppType`。
+fn inbound_protocol_for(app_type: &AppType, endpoint: &str) -> Protocol {
+    let path = endpoint.split('?').next().unwrap_or(endpoint);
+    if path.ends_with("/chat/completions") {
+        Protocol::OpenAiChat
+    } else if path.ends_with("/responses") {
+        Protocol::OpenAiResponses
+    } else if path.contains("/models/") || path.contains("/v1beta/") {
+        Protocol::Gemini
+    } else if path.ends_with("/messages") {
+        Protocol::Anthropic
+    } else {
+        Protocol::from_app_type(app_type)
+    }
+}
+
+/// 供应商的协议。与落库的 `providers.protocol` 使用同一份推断逻辑
+/// （`infer::of_provider`），保证「列表角标」「矩阵判定」「迁移」口径一致。
+pub(crate) fn provider_protocol(app_type: &AppType, provider: &Provider) -> Protocol {
+    crate::protocol::infer::of_provider(app_type, provider).0
+}
+
+/// C′：故障转移只允许同协议。
+///
+/// 返回可尝试的供应商链：首家是链头，后续只保留与链头协议相同的供应商。
+/// 跨协议换家会让已经按入口协议改写过的请求打到不兼容的上游，必须跳过。
+fn same_protocol_failover_chain<'a>(
+    app_type: &AppType,
+    providers: &'a [Provider],
+) -> Vec<&'a Provider> {
+    let Some((first, rest)) = providers.split_first() else {
+        return Vec::new();
+    };
+    let primary = provider_protocol(app_type, first);
+    let mut chain = vec![first];
+    for provider in rest {
+        if provider_protocol(app_type, provider) == primary {
+            chain.push(provider);
+        } else {
+            log::warn!(
+                "[{}] [FO-006] 跳过协议不同的故障转移供应商 {}（{} ≠ {}）",
+                app_type.as_str(),
+                provider.name,
+                provider_protocol(app_type, provider).as_str(),
+                primary.as_str()
+            );
+        }
+    }
+    chain
+}
 
 /// Whether the upstream belongs to the OpenCode gateway (`opencode.ai`).
 ///
@@ -803,17 +858,45 @@ impl RequestForwarder {
         let mut last_provider = None;
         let mut attempted_providers = 0usize;
 
+        // 入口协议由客户端请求路径决定；上游协议由激活供应商决定。
+        let inbound_protocol = inbound_protocol_for(app_type, endpoint);
+
+        // C′：故障转移链只保留与链头同协议的供应商。
+        let failover_chain = same_protocol_failover_chain(app_type, providers);
+
         // 单 Provider 场景下跳过熔断器检查（故障转移关闭时）；Stack 模型的请求不碰熔断器。
-        let bypass_circuit_breaker = providers.len() == 1 || !self.routing_state_enabled();
+        let bypass_circuit_breaker =
+            failover_chain.len() == 1 || !self.routing_state_enabled();
 
         // 依次尝试每个供应商
-        for provider in providers.iter() {
+        for provider in failover_chain {
             // 整流器重试标记：每个 provider 独立持有，避免标记跨 provider 短路故障转移
             // —— 首家 provider 整流后被 5xx/timeout 击落时，下家仍能用整流后的请求体走整流流程
             let mut rectifier_retried = false;
             let mut budget_rectifier_retried = false;
             let mut media_rectifier_retried = false;
             let mut opaque_rectifier_retried = false;
+
+            // 转换矩阵：入口协议 → 上游协议。没有转换器的格子直接 501，
+            // 禁止静默降级成别的协议（矩阵是唯一权威，见 `protocol.rs`）。
+            let upstream_protocol = provider_protocol(app_type, provider);
+            if matches!(
+                Matrix::plan(inbound_protocol, upstream_protocol),
+                Conversion::Unsupported
+            ) {
+                log::warn!(
+                    "[{app_type_str}] [FO-007] 入口 {} → 上游 {} 没有转换器，返回 501",
+                    inbound_protocol.as_str(),
+                    upstream_protocol.as_str()
+                );
+                return Err(ForwardError {
+                    error: ProxyError::ProtocolUnsupported(Matrix::unsupported_message(
+                        inbound_protocol,
+                        upstream_protocol,
+                    )),
+                    provider: Some(provider.clone()),
+                });
+            }
 
             // 上限检查：尊重用户在 AppProxyConfig.max_retries 上配置的「重试次数」。
             // 放在熔断器 allow 检查之前，避免在已经超限时还占用 HalfOpen 探测名额。
@@ -1375,6 +1458,28 @@ impl RequestForwarder {
         codex_upstream_format_out: &mut Option<CodexUpstreamFormat>,
     ) -> Result<(ProxyResponse, Option<String>, Option<String>), ProxyError> {
         *codex_upstream_format_out = None;
+
+        // P3：Gemini 的模型名在 URI 里，默认模型必须改路径而不是 body。
+        // 其余三种协议在下面的 `apply_model_mapping` 里统一改 body。
+        let gemini_endpoint_override;
+        let endpoint = if matches!(app_type, AppType::Gemini) {
+            match super::model_mapper::default_model_from_provider(provider) {
+                Some(model) => {
+                    gemini_endpoint_override =
+                        super::model_mapper::rewrite_gemini_endpoint_model(endpoint, &model);
+                    log::debug!(
+                        "[ModelMapper] Gemini URI 模型改写: {} → {}",
+                        endpoint,
+                        gemini_endpoint_override
+                    );
+                    gemini_endpoint_override.as_str()
+                }
+                None => endpoint,
+            }
+        } else {
+            endpoint
+        };
+
         // 使用适配器提取 base_url
         let mut base_url = adapter.extract_base_url(provider)?;
 
@@ -1400,6 +1505,12 @@ impl RequestForwarder {
                 && super::providers::should_convert_codex_responses_to_anthropic(
                     provider, endpoint,
                 );
+        // P4：Chat 入口 × Responses 上游。请求方向改 endpoint 与 body，
+        // 响应方向由 handle_chat_completions 依据供应商协议转回 Chat 形状。
+        let chat_to_responses = !codex_responses_to_chat
+            && !codex_responses_to_anthropic
+            && inbound_protocol_for(app_type, endpoint) == Protocol::OpenAiChat
+            && provider_protocol(app_type, provider) == Protocol::OpenAiResponses;
         let mut copilot_endpoint_override: Option<String> = None;
         let codex_official_auth_passthrough = matches!(app_type, AppType::Codex)
             && super::providers::is_codex_official_provider(provider);
@@ -1747,6 +1858,8 @@ impl RequestForwarder {
                 rewrite_codex_responses_endpoint_to_chat(endpoint)
             } else if codex_responses_to_anthropic {
                 rewrite_codex_responses_endpoint_to_anthropic(endpoint)
+            } else if chat_to_responses {
+                rewrite_chat_endpoint_to_responses(endpoint)
             } else if needs_transform && adapter.name() == "Claude" {
                 let api_format = resolved_claude_api_format
                     .as_deref()
@@ -1771,6 +1884,10 @@ impl RequestForwarder {
         // exact endpoint suffix, so prefixed gateways like `.../api/v1/messages` are covered.
         let codex_anthropic_base_is_full_endpoint =
             codex_responses_to_anthropic && base_url_is_full_endpoint(&base_url, "/v1/messages");
+        let chat_responses_base_is_full_endpoint =
+            chat_to_responses && base_url_is_full_endpoint(&base_url, "/responses");
+        let chat_responses_base_is_chat_endpoint =
+            chat_to_responses && base_url_is_full_endpoint(&base_url, "/chat/completions");
 
         let codex_standalone_endpoint = matches!(app_type, AppType::Codex)
             .then(|| CodexStandaloneEndpoint::from_effective_endpoint(&effective_endpoint))
@@ -1788,7 +1905,10 @@ impl RequestForwarder {
                 is_full_url,
             )
         } else if is_full_url {
-            if let Some(endpoint) = codex_standalone_endpoint {
+            if chat_to_responses {
+                let rewritten = rewrite_base_url_chat_to_responses(&base_url);
+                append_query_to_full_url(&rewritten, passthrough_query.as_deref())
+            } else if let Some(endpoint) = codex_standalone_endpoint {
                 rewrite_codex_standalone_full_url(
                     &base_url,
                     passthrough_query.as_deref(),
@@ -1797,6 +1917,11 @@ impl RequestForwarder {
             } else {
                 append_query_to_full_url(&base_url, passthrough_query.as_deref())
             }
+        } else if chat_responses_base_is_chat_endpoint {
+            let rewritten = rewrite_base_url_chat_to_responses(&base_url);
+            append_query_to_full_url(&rewritten, passthrough_query.as_deref())
+        } else if chat_responses_base_is_full_endpoint {
+            append_query_to_full_url(&base_url, passthrough_query.as_deref())
         } else if let Some(endpoint) = codex_standalone_endpoint
             .filter(|endpoint| endpoint.base_url_is_source_endpoint(&base_url))
         {
@@ -1931,6 +2056,8 @@ impl RequestForwarder {
                 &codex_anthropic_cache_config(&self.optimizer_config),
             );
             anthropic_body
+        } else if chat_to_responses {
+            super::providers::transform_chat_responses::chat_request_to_responses(mapped_body)?
         } else if needs_transform {
             if adapter.name() == "Claude" {
                 let api_format = resolved_claude_api_format
@@ -3512,6 +3639,33 @@ fn is_claude_messages_path(path: &str) -> bool {
     matches!(path, "/v1/messages" | "/claude/v1/messages")
 }
 
+/// Chat 入口 → Responses 上游：`/chat/completions` 改成 `/responses`。
+fn rewrite_chat_endpoint_to_responses(endpoint: &str) -> (String, Option<String>) {
+    let (path, query) = split_endpoint_and_query(endpoint);
+    let rewritten = match path.strip_suffix("/chat/completions") {
+        Some(prefix) => format!("{prefix}/responses"),
+        None => path.to_string(),
+    };
+    (rewritten, query.map(ToString::to_string))
+}
+
+/// 供应商把完整端点写进 base URL 时，把 `/chat/completions` 换成 `/responses`。
+fn rewrite_base_url_chat_to_responses(base_url: &str) -> String {
+    let trimmed = base_url.trim();
+    let (path, query) = match trimmed.split_once('?') {
+        Some((path, query)) => (path, Some(query)),
+        None => (trimmed, None),
+    };
+    let rewritten = match path.trim_end_matches('/').strip_suffix("/chat/completions") {
+        Some(prefix) => format!("{prefix}/responses"),
+        None => path.to_string(),
+    };
+    match query {
+        Some(query) => format!("{rewritten}?{query}"),
+        None => rewritten,
+    }
+}
+
 fn rewrite_codex_responses_endpoint_to_chat(endpoint: &str) -> (String, Option<String>) {
     let (_path, query) = split_endpoint_and_query(endpoint);
     let passthrough_query = query.map(ToString::to_string);
@@ -4599,6 +4753,57 @@ mod tests {
             );
         }
         assert!(!is_opencode_upstream(None));
+    }
+
+    fn provider_with_format(id: &str, api_format: &str) -> Provider {
+        let mut provider =
+            Provider::with_id(id.to_string(), id.to_string(), json!({ "env": {} }), None);
+        provider.meta = Some(crate::provider::ProviderMeta {
+            api_format: Some(api_format.to_string()),
+            ..Default::default()
+        });
+        provider
+    }
+
+    #[test]
+    fn failover_chain_stops_at_a_different_protocol() {
+        // 链头是 Anthropic，后续 chat/gemini 供应商 C′ 不允许参与故障转移。
+        let providers = vec![
+            provider_with_format("a", "anthropic"),
+            provider_with_format("b", "anthropic"),
+            provider_with_format("c", "openai_chat"),
+            provider_with_format("d", "gemini_native"),
+            provider_with_format("e", "anthropic"),
+        ];
+        let chain = same_protocol_failover_chain(&AppType::Claude, &providers);
+        assert_eq!(
+            chain.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b", "e"]
+        );
+    }
+
+    #[test]
+    fn failover_chain_keeps_only_the_current_provider_when_it_has_no_siblings() {
+        let providers = vec![
+            provider_with_format("a", "openai_chat"),
+            provider_with_format("b", "openai_responses"),
+        ];
+        let chain = same_protocol_failover_chain(&AppType::Claude, &providers);
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].id, "a");
+    }
+
+    #[test]
+    fn empty_failover_chain_is_empty() {
+        assert!(same_protocol_failover_chain(&AppType::Claude, &[]).is_empty());
+    }
+
+    #[test]
+    fn unsupported_matrix_cell_reports_both_protocols_in_chinese() {
+        let message = Matrix::unsupported_message(Protocol::OpenAiChat, Protocol::OpenAiResponses);
+        assert!(message.contains("OpenAI Chat Completions"));
+        assert!(message.contains("OpenAI Responses"));
+        assert!(message.contains("没有可用的转换器"));
     }
 
     #[test]

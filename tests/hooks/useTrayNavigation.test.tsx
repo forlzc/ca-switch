@@ -35,8 +35,8 @@ describe("parseTrayNavigation", () => {
         providerId: "copilot",
       }),
     ).toEqual({ app: "claude", intent: "needsRoute", providerId: "copilot" });
-    expect(parseTrayNavigation({ app: "grokbuild", intent: "add" })).toEqual({
-      app: "grokbuild",
+    expect(parseTrayNavigation({ app: "claude", intent: "add" })).toEqual({
+      app: "claude",
       intent: "add",
       providerId: undefined,
     });
@@ -49,20 +49,20 @@ describe("parseTrayNavigation", () => {
     expect(parseTrayNavigation(null)).toBeNull();
     expect(parseTrayNavigation({ app: "nope" })).toBeNull();
     expect(parseTrayNavigation({ section: "nope" })).toBeNull();
-    expect(parseTrayNavigation({ app: "codex", intent: "needsRoute" })).toEqual(
-      { app: "codex" },
-    );
+    expect(
+      parseTrayNavigation({ app: "claude", intent: "needsRoute" }),
+    ).toEqual({ app: "claude" });
   });
 });
 
 describe("useTrayNavigation", () => {
   it("takes a navigation left before the window existed", async () => {
-    pendingNavigation({ app: "codex" });
+    pendingNavigation({ app: "claude" });
     const onNavigate = vi.fn();
     renderHook(() => useTrayNavigation(onNavigate));
     await waitFor(() =>
       expect(onNavigate).toHaveBeenCalledWith({
-        app: "codex",
+        app: "claude",
         intent: undefined,
         providerId: undefined,
       }),
@@ -100,14 +100,14 @@ describe("useTrayAppPageSeen", () => {
       }),
     );
     const { rerender } = renderHook(
-      ({ app }: { app: "codex" | null }) => useTrayAppPageSeen(app),
-      { initialProps: { app: null as "codex" | null } },
+      ({ app }: { app: "claude" | null }) => useTrayAppPageSeen(app),
+      { initialProps: { app: null as "claude" | null } },
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(seen).toEqual([]);
 
-    rerender({ app: "codex" });
-    await waitFor(() => expect(seen).toEqual([{ appType: "codex" }]));
+    rerender({ app: "claude" });
+    await waitFor(() => expect(seen).toEqual([{ appType: "claude" }]));
     window.dispatchEvent(new Event("focus"));
     await waitFor(() => expect(seen).toHaveLength(2));
   });

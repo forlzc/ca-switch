@@ -3,7 +3,6 @@ import { proxyApi } from "@/lib/api/proxy";
 import { toast } from "@/lib/toast";
 import { useTranslation } from "react-i18next";
 import type {
-  AppModeView,
   GlobalProxyConfig,
   AppProxyConfig,
   ProxyStackWriteError,
@@ -50,31 +49,6 @@ export function useProxyTakeoverStatus(poll = true) {
           placeholderData: (previousData: ProxyTakeoverStatus | undefined) =>
             previousData,
         }),
-  });
-}
-
-/**
- * 应用的模式状态（直连 / 路由 / 聚合、路由目标、直连那家）。放在 ["providers", appId] 前缀下：
- * 进出模式、切换供应商时随供应商列表一起失效。
- */
-export function useAppMode(appType: string, enabled = true) {
-  return useQuery({
-    queryKey: ["providers", appType, "mode"] as const,
-    queryFn: () => proxyApi.getAppMode(appType),
-    enabled,
-    placeholderData: (previous: AppModeView | undefined) => previous,
-  });
-}
-
-/**
- * 直连供应商（路由模式下退出路由时写回的那家）。
- * 放在 ["providers", appId] 前缀下：切换、编辑供应商时随供应商列表一起失效。
- */
-export function useDirectProviderId(appType: string, enabled: boolean) {
-  return useQuery({
-    queryKey: ["providers", appType, "direct"] as const,
-    queryFn: () => proxyApi.getDirectProvider(appType),
-    enabled,
   });
 }
 

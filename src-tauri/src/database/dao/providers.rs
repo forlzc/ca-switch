@@ -17,10 +17,13 @@ type OmoProviderRow = (
 );
 
 /// v25：把协议证据与连接信息一并落库，供 forwarder 的 Matrix::plan 使用。
+///
+/// `default_model` 是前端的唯一一个「默认模型」输入框，落在
+/// `settings_config.env.ANTHROPIC_MODEL`；这里同步写进独立列，便于查询与排查。
 fn v25_protocol_fields(
     app_type: &str,
     provider: &Provider,
-) -> (String, String, String, Option<String>, String) {
+) -> (String, String, String, Option<String>, String, Option<String>) {
     let app = app_type.parse::<crate::app_config::AppType>().ok();
     let (protocol, source) = match app {
         Some(app) => crate::protocol::infer::of_provider(&app, provider),
@@ -41,12 +44,22 @@ fn v25_protocol_fields(
     } else {
         "api_key".to_string()
     };
+    let default_model = provider
+        .settings_config
+        .get("env")
+        .and_then(|env| env.get("ANTHROPIC_MODEL"))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
     (
         protocol.as_str().to_string(),
         format!("{:?}", source).to_ascii_lowercase(),
         base_url,
         api_key,
         auth_style,
+        default_model,
     )
 }
 
@@ -443,12 +456,20 @@ impl Database {
             }
         }
 
-        let (protocol, source, base_url, api_key, auth_style) =
+        let (protocol, source, base_url, api_key, auth_style, default_model) =
             v25_protocol_fields(app_type, provider);
         tx.execute(
             "UPDATE providers SET protocol = ?1, protocol_source = ?2, base_url = ?3,
-                    api_key = ?4, auth_style = ?5 WHERE id = ?6",
-            params![protocol, source, base_url, api_key, auth_style, provider.id],
+                    api_key = ?4, auth_style = ?5, default_model = ?6 WHERE id = ?7",
+            params![
+                protocol,
+                source,
+                base_url,
+                api_key,
+                auth_style,
+                default_model,
+                provider.id
+            ],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
@@ -551,12 +572,20 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        let (protocol, source, base_url, api_key, auth_style) =
+        let (protocol, source, base_url, api_key, auth_style, default_model) =
             v25_protocol_fields(app_type, provider);
         tx.execute(
             "UPDATE providers SET protocol = ?1, protocol_source = ?2, base_url = ?3,
-                    api_key = ?4, auth_style = ?5 WHERE id = ?6",
-            params![protocol, source, base_url, api_key, auth_style, provider.id],
+                    api_key = ?4, auth_style = ?5, default_model = ?6 WHERE id = ?7",
+            params![
+                protocol,
+                source,
+                base_url,
+                api_key,
+                auth_style,
+                default_model,
+                provider.id
+            ],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
@@ -571,6 +600,18 @@ impl Database {
             params![id, app_type],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// 清空全部供应商及健康记录（精简版升级时只执行一次）。
+    pub fn delete_all_providers(&self) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        conn.execute("DELETE FROM providers", [])
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        conn.execute("DELETE FROM provider_endpoints", [])
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        conn.execute("DELETE FROM provider_health", [])
+            .map_err(|e| AppError::Database(e.to_string()))?;
         Ok(())
     }
 

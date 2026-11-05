@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use cc_switch_lib::{AppState, AppType, Provider, ProviderMeta};
+use ca_switch_lib::{AppState, AppType, Provider, ProviderMeta};
 
 use crate::support::ensure_test_home;
 

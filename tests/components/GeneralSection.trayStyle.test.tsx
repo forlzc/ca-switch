@@ -34,7 +34,6 @@ function renderSection(settings: Partial<SettingsFormState> = {}) {
     <GeneralSection
       settings={{ ...baseSettings, ...settings }}
       onAutoSave={onAutoSave}
-      onOpenApps={vi.fn()}
     />,
   );
   return onAutoSave;

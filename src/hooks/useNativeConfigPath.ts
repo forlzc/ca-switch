@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { settingsApi } from "@/lib/api";
 import type { AppId } from "@/lib/api/types";
-import { shortenHomePath } from "@/components/sessions/utils";
+import { shortenHomePath } from "@/utils/pathUtils";
 
 /**
  * 供应商编辑器标题里显示的配置文件真实路径：跟随目录覆盖和应用自己的环境变量

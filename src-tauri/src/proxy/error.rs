@@ -81,6 +81,11 @@ pub enum ProxyError {
     #[allow(dead_code)]
     #[error("内部错误: {0}")]
     Internal(String),
+
+    /// 入口协议与上游协议之间没有转换器（转换矩阵里的空白格）。
+    /// 必须返回 501，禁止静默降级成别的协议。
+    #[error("{0}")]
+    ProtocolUnsupported(String),
 }
 
 impl IntoResponse for ProxyError {
@@ -168,6 +173,9 @@ impl IntoResponse for ProxyError {
                     }
                     ProxyError::ResponseBodyTooLarge(_) => {
                         (StatusCode::BAD_GATEWAY, self.to_string())
+                    }
+                    ProxyError::ProtocolUnsupported(_) => {
+                        (StatusCode::NOT_IMPLEMENTED, self.to_string())
                     }
                     ProxyError::UpstreamError { .. } => unreachable!(),
                 };

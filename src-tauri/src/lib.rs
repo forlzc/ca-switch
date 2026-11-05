@@ -598,7 +598,7 @@ pub fn run() {
                             Target::new(TargetKind::Stdout),
                             Target::new(TargetKind::Folder {
                                 path: log_dir,
-                                file_name: Some("cc-switch".into()),
+                                file_name: Some("ca-switch".into()),
                             }),
                         ])
                         // KeepSome(4) 保留 4 个轮转归档，加上当前文件最多约 100 MiB。
@@ -643,7 +643,7 @@ pub fn run() {
 
             // 初始化数据库
             let app_config_dir = crate::config::get_app_config_dir();
-            let db_path = app_config_dir.join("cc-switch.db");
+            let db_path = app_config_dir.join("ca-switch.db");
             let json_path = app_config_dir.join("config.json");
 
             // 检查是否需要从 config.json 迁移到 SQLite
@@ -785,7 +785,7 @@ pub fn run() {
             // 按表独立判断的导入逻辑（各类数据独立检查，互不影响）
             // ============================================================
 
-            // 1.5. seed 官方预设供应商（Claude / Codex / Gemini）
+            // 1.5. 不再写入官方预设供应商：精简版只允许用户新建自定义供应商。
             //
             // 捕获首次运行快照：所有全新装用户都会看到欢迎弹窗介绍本应用的工作方式。
             // 读失败时默认不弹，宁可漏弹也不要因为故障打扰用户。
@@ -794,14 +794,6 @@ pub fn run() {
                 .unwrap_or(false);
             let fresh_install_at_startup =
                 app_state.db.is_providers_empty().unwrap_or(false);
-
-            match app_state.db.init_default_official_providers() {
-                Ok(count) if count > 0 => {
-                    log::info!("✓ Seeded {count} official provider(s)");
-                }
-                Ok(_) => {}
-                Err(e) => log::warn!("✗ Failed to seed official providers: {e}"),
-            }
 
             {
                 let db_for_codex_history_migration = app_state.db.clone();
@@ -941,33 +933,24 @@ pub fn run() {
                 }
             }
 
-            // 4. 导入提示词文件（表空时触发）
-            if app_state.db.is_prompts_table_empty().unwrap_or(false) {
-                log::info!("Prompts table empty, importing from live configurations...");
-
-                for app in [
-                    crate::app_config::AppType::Claude,
-                    crate::app_config::AppType::Codex,
-                    crate::app_config::AppType::Gemini,
-                    crate::app_config::AppType::GrokBuild,
-                    crate::app_config::AppType::OpenCode,
-                    crate::app_config::AppType::OpenClaw,
-                    crate::app_config::AppType::Hermes,
-                    crate::app_config::AppType::Pi,
-                    crate::app_config::AppType::Mcode,
-                ] {
-                    match crate::services::prompt::PromptService::import_from_file_on_first_launch(
-                        &app_state,
-                        app.clone(),
-                    ) {
-                        Ok(count) if count > 0 => {
-                            log::info!("✓ Imported {count} prompt(s) for {}", app.as_str());
-                        }
-                        Ok(_) => log::debug!("○ No prompt file found for {}", app.as_str()),
-                        Err(e) => log::warn!("✗ Failed to import prompt for {}: {e}", app.as_str()),
+            // 精简版升级：一次性清空历史供应商数据，之后只允许新建自定义供应商。
+            let reset_done = app_state
+                .db
+                .get_setting("slim_provider_reset_v1")
+                .ok()
+                .flatten()
+                .is_some();
+            if !reset_done {
+                match app_state.db.delete_all_providers() {
+                    Ok(()) => {
+                        log::info!("✓ 精简版升级：已清空历史供应商数据");
                     }
+                    Err(e) => log::warn!("✗ 清空历史供应商数据失败: {e}"),
                 }
+                let _ = app_state.db.set_setting("slim_provider_reset_v1", "true");
             }
+
+            // 提示词功能已移除，不再导入提示词文件。
 
             // 迁移旧的 app_config_dir 配置到 Store
             if let Err(e) = app_store::migrate_app_config_dir_from_settings(app.handle()) {
@@ -985,12 +968,12 @@ pub fn run() {
                 #[cfg(target_os = "linux")]
                 {
                     // Use Tauri's path API to get correct path (includes app identifier)
-                    // tauri-plugin-deep-link writes to: ~/.local/share/com.ccswitch.desktop/applications/cc-switch-handler.desktop
+                    // tauri-plugin-deep-link writes to: ~/.local/share/com.ca-switch.desktop/applications/ca-switch-handler.desktop
                     // Only register if .desktop file doesn't exist to avoid overwriting user customizations
                     let should_register = app
                         .path()
                         .data_dir()
-                        .map(|d| !d.join("applications/cc-switch-handler.desktop").exists())
+                        .map(|d| !d.join("applications/ca-switch-handler.desktop").exists())
                         .unwrap_or(true);
 
                     if should_register {
@@ -1410,20 +1393,7 @@ pub fn run() {
             commands::get_balance,
             // New MCP via config.json (SSOT)
             // Unified MCP management
-            // Prompt management
-            commands::get_prompts,
-            commands::upsert_prompt,
-            commands::delete_prompt,
-            commands::enable_prompt,
-            commands::import_prompt_from_file,
-            commands::get_current_prompt_file_content,
-            commands::get_prompt_file_location,
-            commands::get_pi_prompt_file,
-            commands::replace_pi_prompt_file,
-            commands::delete_pi_prompt_file,
-            commands::list_pi_prompt_templates,
-            commands::upsert_pi_prompt_template,
-            commands::delete_pi_prompt_template,
+            // Prompt management removed
             // Pi native provider and session views
             commands::get_pi_current_state,
             commands::update_pi_provider_usage_script,
@@ -1559,22 +1529,7 @@ pub fn run() {
             commands::fetch_exchange_rates,
             // Stream health check
             commands::stream_check_provider,
-            // Session manager
-            commands::list_sessions,
-            commands::get_session_messages,
-            commands::stream_session_messages,
-            commands::get_session_block_content,
-            commands::get_session_image,
-            commands::reveal_session_path,
-            commands::export_session_markdown,
-            commands::delete_session,
-            commands::delete_sessions,
-            commands::launch_session_terminal,
-            commands::get_tool_versions,
-            commands::run_tool_lifecycle_action,
-            commands::prepare_tool_uninstall,
-            commands::probe_tool_installations,
-            commands::list_tool_installations,
+            // Session and app/tool management removed
             // Provider terminal
             commands::open_provider_terminal,
             // Universal Provider management
@@ -1675,16 +1630,6 @@ pub fn run() {
             commands::read_omo_slim_local_file,
             commands::get_current_omo_slim_provider_id,
             commands::disable_current_omo_slim,
-            // Workspace files (OpenClaw)
-            commands::read_workspace_file,
-            commands::write_workspace_file,
-            // Daily memory files (OpenClaw workspace)
-            commands::list_daily_memory_files,
-            commands::read_daily_memory_file,
-            commands::write_daily_memory_file,
-            commands::delete_daily_memory_file,
-            commands::search_daily_memory_files,
-            commands::open_workspace_directory,
             // lightweight mode (for testing or low-resource environments)
             commands::enter_lightweight_mode,
             commands::exit_lightweight_mode,

@@ -34,14 +34,8 @@ const COPILOT_UNIT_PREMIUM: &str = "requests";
 
 pub const TRAY_ID: &str = "cc-switch";
 
-/// 进托盘的应用，顺序和侧栏一致。累加式应用没有「当前供应商」，不进托盘。
-pub const TRAY_APPS: [AppType; 5] = [
-    AppType::Claude,
-    AppType::ClaudeDesktop,
-    AppType::Codex,
-    AppType::Gemini,
-    AppType::GrokBuild,
-];
+/// 进托盘的应用；精简后只保留 Claude。
+pub const TRAY_APPS: [AppType; 1] = [AppType::Claude];
 
 /// 应用全称（产品名，不翻译）。用全称是为了把 Claude Code 和 Claude Desktop 分开。
 fn app_display_name(app: &AppType) -> &'static str {
@@ -3298,16 +3292,7 @@ mod tests {
     #[test]
     fn tray_lists_switch_apps_in_sidebar_order_without_additive_apps() {
         let names: Vec<&str> = TRAY_APPS.iter().map(app_display_name).collect();
-        assert_eq!(
-            names,
-            [
-                "Claude Code",
-                "Claude Desktop",
-                "Codex",
-                "Gemini CLI",
-                "Grok Build"
-            ]
-        );
+        assert_eq!(names, ["Claude Code"]);
         for app in TRAY_APPS {
             assert!(!app.is_additive_mode(), "{app:?} 是累加式应用，不进托盘");
         }

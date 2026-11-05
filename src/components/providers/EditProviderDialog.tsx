@@ -11,13 +11,11 @@ import {
   ProviderForm,
   type ProviderFormValues,
 } from "@/components/providers/forms/ProviderForm";
-import { AuthSettingsPanel } from "@/components/providers/AuthSettingsPanel";
 import {
   openclawApi,
   providersApi,
   vscodeApi,
   type AppId,
-  type AuthCenterTarget,
 } from "@/lib/api";
 import type {
   EditorConflictPolicy,
@@ -78,12 +76,6 @@ export function EditProviderDialog({
   const [isFormSubmitting, setIsFormSubmitting] = useState(false);
   // 表单用了聚合的简化布局：页头应用名后标「聚合模式」
   const [stackLayout, setStackLayout] = useState(false);
-  const [authSettingsTarget, setAuthSettingsTarget] =
-    useState<AuthCenterTarget | null>(null);
-
-  useEffect(() => {
-    setAuthSettingsTarget(null);
-  }, [appId, open, provider?.id]);
 
   const formReadyToken = useMemo(
     () => Symbol("provider-form-ready"),
@@ -122,17 +114,10 @@ export function EditProviderDialog({
   const { submitWithConflictRetry, conflictDialog } = useLiveEditConflict();
 
   const closeDialog = useCallback(() => {
-    setAuthSettingsTarget(null);
     onOpenChange(false);
   }, [onOpenChange]);
 
-  const handlePanelClose = useCallback(() => {
-    if (authSettingsTarget) {
-      setAuthSettingsTarget(null);
-      return;
-    }
-    closeDialog();
-  }, [authSettingsTarget, closeDialog]);
+  const handlePanelClose = closeDialog;
 
   useEffect(() => {
     let cancelled = false;
@@ -416,7 +401,6 @@ export function EditProviderDialog({
           submitLabel={t("common.save")}
           onSubmit={handleSubmit}
           onCancel={closeDialog}
-          onManageAuthAccounts={setAuthSettingsTarget}
           onSubmittingChange={setIsFormSubmitting}
           onSubmitReadyChange={handleSubmitReadyChange}
           initialData={initialData}
@@ -428,10 +412,6 @@ export function EditProviderDialog({
         />
       )}
       {conflictDialog}
-      <AuthSettingsPanel
-        target={authSettingsTarget}
-        onClose={() => setAuthSettingsTarget(null)}
-      />
     </FullScreenPanel>
   );
 }

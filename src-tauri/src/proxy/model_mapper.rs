@@ -6,111 +6,68 @@ use crate::claude_desktop_config::ONE_M_CONTEXT_MARKER;
 use crate::provider::Provider;
 use serde_json::Value;
 
-/// 模型映射配置
+/// 模型映射配置。
+///
+/// 精简后 Claude 入口只保留一个默认模型映射：配了 `ANTHROPIC_MODEL` 就把所有请求
+/// 统一改写成它，没配就原样使用请求里的模型名（等同用户直传上游模型名）。
 pub struct ModelMapping {
-    pub haiku_model: Option<String>,
-    pub sonnet_model: Option<String>,
-    pub opus_model: Option<String>,
-    pub fable_model: Option<String>,
-    pub subagent_model: Option<String>,
     pub default_model: Option<String>,
 }
 
 impl ModelMapping {
-    /// 从 Provider 配置中提取模型映射
+    /// 从 Provider 配置中提取默认模型映射
     pub fn from_provider(provider: &Provider) -> Self {
-        let env = provider.settings_config.get("env");
-
         Self {
-            haiku_model: env
-                .and_then(|e| e.get("ANTHROPIC_DEFAULT_HAIKU_MODEL"))
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(String::from),
-            sonnet_model: env
-                .and_then(|e| e.get("ANTHROPIC_DEFAULT_SONNET_MODEL"))
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(String::from),
-            opus_model: env
-                .and_then(|e| e.get("ANTHROPIC_DEFAULT_OPUS_MODEL"))
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(String::from),
-            fable_model: env
-                .and_then(|e| e.get("ANTHROPIC_DEFAULT_FABLE_MODEL"))
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(String::from),
-            subagent_model: env
-                .and_then(|e| e.get("CLAUDE_CODE_SUBAGENT_MODEL"))
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(String::from),
-            default_model: env
-                .and_then(|e| e.get("ANTHROPIC_MODEL"))
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(String::from),
+            default_model: default_model_from_provider(provider),
         }
     }
 
-    /// 检查是否配置了任何模型映射
+    /// 检查是否配置了默认模型映射
     pub fn has_mapping(&self) -> bool {
-        self.haiku_model.is_some()
-            || self.sonnet_model.is_some()
-            || self.opus_model.is_some()
-            || self.fable_model.is_some()
-            || self.subagent_model.is_some()
-            || self.default_model.is_some()
+        self.default_model.is_some()
     }
 
     /// 根据原始模型名称获取映射后的模型
     pub fn map_model(&self, original_model: &str) -> String {
-        let model_lower = original_model.to_lowercase();
-
-        // 1. 按模型类型匹配
-        if model_lower.contains("fable") {
-            if let Some(ref m) = self.fable_model {
-                return m.clone();
-            }
-            // 未单独配置 fable 档时归入 opus 档，与 Claude Code 官方
-            // 分类器降级方向一致（fable→opus），避免落到 default 失去层级。
-            if let Some(ref m) = self.opus_model {
-                return m.clone();
-            }
-        }
-        if model_lower.contains("haiku") {
-            if let Some(ref m) = self.haiku_model {
-                return m.clone();
-            }
-        }
-        if model_lower.contains("opus") {
-            if let Some(ref m) = self.opus_model {
-                return m.clone();
-            }
-        }
-        if model_lower.contains("sonnet") {
-            if let Some(ref m) = self.sonnet_model {
-                return m.clone();
-            }
-        }
-
-        if let Some(ref m) = self.subagent_model {
-            if strip_one_m_suffix_for_upstream(original_model) == strip_one_m_suffix_for_upstream(m)
-            {
-                return original_model.to_string();
-            }
-        }
-
-        // 2. 默认模型
         if let Some(ref m) = self.default_model {
             return m.clone();
         }
 
-        // 3. 无映射，保持原样
+        // 无映射，保持原样：默认使用请求里的模型名
         original_model.to_string()
     }
+}
+
+/// 供应商的唯一默认模型。
+///
+/// 前端只保留一个「默认模型」输入框，落到 `settings_config.env.ANTHROPIC_MODEL`；
+/// 它同时会写进 `providers.default_model` 列。留空即透传请求里的模型名。
+pub fn default_model_from_provider(provider: &Provider) -> Option<String> {
+    provider
+        .settings_config
+        .get("env")
+        .and_then(|e| e.get("ANTHROPIC_MODEL"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Gemini 入站请求的模型名在 URI 里（`/v1beta/models/{model}:generateContent`），
+/// 不能只改 body，必须把 URI 的模型段一起换掉。
+pub fn rewrite_gemini_endpoint_model(endpoint: &str, model: &str) -> String {
+    let Some(idx) = endpoint.find("/models/") else {
+        return endpoint.to_string();
+    };
+    let prefix_end = idx + "/models/".len();
+    let rest = &endpoint[prefix_end..];
+    let stop = rest.find([':', '?']).unwrap_or(rest.len());
+
+    let mut out = String::with_capacity(endpoint.len());
+    out.push_str(&endpoint[..prefix_end]);
+    out.push_str(super::gemini_url::normalize_gemini_model_id(model));
+    out.push_str(&rest[stop..]);
+    out
 }
 
 /// 对请求体应用模型映射
@@ -183,10 +140,6 @@ mod tests {
             settings_config: json!({
                 "env": {
                     "ANTHROPIC_MODEL": "default-model",
-                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "haiku-mapped",
-                    "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-mapped",
-                    "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-mapped",
-                    "ANTHROPIC_DEFAULT_FABLE_MODEL": "fable-mapped"
                 }
             }),
             website_url: None,
@@ -219,181 +172,42 @@ mod tests {
     }
 
     #[test]
-    fn test_sonnet_mapping() {
+    fn any_request_model_uses_the_single_default() {
         let provider = create_provider_with_mapping();
-        let body = json!({"model": "claude-sonnet-4-5-20250929"});
-        let (result, original, mapped) = apply_model_mapping(body, &provider);
-        assert_eq!(result["model"], "sonnet-mapped");
-        assert_eq!(original, Some("claude-sonnet-4-5-20250929".to_string()));
-        assert_eq!(mapped, Some("sonnet-mapped".to_string()));
+        for model in [
+            "claude-sonnet-4-5-20250929",
+            "claude-haiku-4-5",
+            "claude-opus-4-5",
+            "some-unknown-model",
+        ] {
+            let body = json!({ "model": model });
+            let (result, original, mapped) = apply_model_mapping(body, &provider);
+            assert_eq!(result["model"], "default-model", "{model}");
+            assert_eq!(original, Some(model.to_string()));
+            assert_eq!(mapped, Some("default-model".to_string()));
+        }
     }
 
     #[test]
-    fn test_haiku_mapping() {
-        let provider = create_provider_with_mapping();
-        let body = json!({"model": "claude-haiku-4-5"});
-        let (result, _, mapped) = apply_model_mapping(body, &provider);
-        assert_eq!(result["model"], "haiku-mapped");
-        assert_eq!(mapped, Some("haiku-mapped".to_string()));
-    }
-
-    #[test]
-    fn test_opus_mapping() {
-        let provider = create_provider_with_mapping();
-        let body = json!({"model": "claude-opus-4-5"});
-        let (result, _, mapped) = apply_model_mapping(body, &provider);
-        assert_eq!(result["model"], "opus-mapped");
-        assert_eq!(mapped, Some("opus-mapped".to_string()));
-    }
-
-    #[test]
-    fn test_fable_mapping() {
-        let provider = create_provider_with_mapping();
-        let body = json!({"model": "claude-fable-5"});
-        let (result, _, mapped) = apply_model_mapping(body, &provider);
-        assert_eq!(result["model"], "fable-mapped");
-        assert_eq!(mapped, Some("fable-mapped".to_string()));
-    }
-
-    #[test]
-    fn test_fable_with_one_m_suffix_mapping() {
-        // Claude Code 实际会发 claude-fable-5[1m] 形态（issue #3980）
-        let provider = create_provider_with_mapping();
-        let body = json!({"model": "claude-fable-5[1m]"});
-        let (result, _, mapped) = apply_model_mapping(body, &provider);
-        assert_eq!(result["model"], "fable-mapped");
-        assert_eq!(mapped, Some("fable-mapped".to_string()));
-    }
-
-    #[test]
-    fn test_fable_falls_back_to_opus_when_unset() {
-        let mut provider = create_provider_with_mapping();
-        provider.settings_config = json!({
-            "env": {
-                "ANTHROPIC_MODEL": "default-model",
-                "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-mapped"
-            }
-        });
-        let body = json!({"model": "claude-fable-5"});
-        let (result, _, mapped) = apply_model_mapping(body, &provider);
-        assert_eq!(result["model"], "opus-mapped");
-        assert_eq!(mapped, Some("opus-mapped".to_string()));
-    }
-
-    #[test]
-    fn test_fable_falls_back_to_default_without_opus() {
-        let mut provider = create_provider_with_mapping();
-        provider.settings_config = json!({
-            "env": {
-                "ANTHROPIC_MODEL": "default-model"
-            }
-        });
-        let body = json!({"model": "claude-fable-5"});
-        let (result, _, mapped) = apply_model_mapping(body, &provider);
-        assert_eq!(result["model"], "default-model");
-        assert_eq!(mapped, Some("default-model".to_string()));
-    }
-
-    #[test]
-    fn test_thinking_does_not_affect_model_mapping() {
-        // Issue #2081: thinking 参数不应影响模型映射
+    fn thinking_does_not_affect_model_mapping() {
         let provider = create_provider_with_mapping();
         let body = json!({
             "model": "claude-sonnet-4-5",
             "thinking": {"type": "enabled"}
         });
         let (result, _, mapped) = apply_model_mapping(body, &provider);
-        assert_eq!(result["model"], "sonnet-mapped");
-        assert_eq!(mapped, Some("sonnet-mapped".to_string()));
-    }
-
-    #[test]
-    fn test_thinking_adaptive_does_not_affect_model_mapping() {
-        // Issue #2081: adaptive thinking 也不应影响模型映射
-        let provider = create_provider_with_mapping();
-        let body = json!({
-            "model": "claude-sonnet-4-5",
-            "thinking": {"type": "adaptive"}
-        });
-        let (result, _, mapped) = apply_model_mapping(body, &provider);
-        assert_eq!(result["model"], "sonnet-mapped");
-        assert_eq!(mapped, Some("sonnet-mapped".to_string()));
-    }
-
-    #[test]
-    fn test_thinking_disabled() {
-        let provider = create_provider_with_mapping();
-        let body = json!({
-            "model": "claude-sonnet-4-5",
-            "thinking": {"type": "disabled"}
-        });
-        let (result, _, mapped) = apply_model_mapping(body, &provider);
-        assert_eq!(result["model"], "sonnet-mapped");
-        assert_eq!(mapped, Some("sonnet-mapped".to_string()));
-    }
-
-    #[test]
-    fn test_unknown_model_uses_default() {
-        let provider = create_provider_with_mapping();
-        let body = json!({"model": "some-unknown-model"});
-        let (result, _, mapped) = apply_model_mapping(body, &provider);
         assert_eq!(result["model"], "default-model");
         assert_eq!(mapped, Some("default-model".to_string()));
     }
 
     #[test]
-    fn test_subagent_model_preserved_before_default_fallback() {
-        let mut provider = create_provider_with_mapping();
-        provider.settings_config = json!({
-            "env": {
-                "ANTHROPIC_MODEL": "default-model",
-                "CLAUDE_CODE_SUBAGENT_MODEL": "gpt-5.4-mini"
-            }
-        });
-
-        let body = json!({"model": "gpt-5.4-mini"});
-        let (result, original, mapped) = apply_model_mapping(body, &provider);
-
-        assert_eq!(result["model"], "gpt-5.4-mini");
-        assert_eq!(original, Some("gpt-5.4-mini".to_string()));
-        assert!(mapped.is_none());
-    }
-
-    #[test]
-    fn test_subagent_model_preserved_with_one_m_suffix_before_default_fallback() {
-        let mut provider = create_provider_with_mapping();
-        provider.settings_config = json!({
-            "env": {
-                "ANTHROPIC_MODEL": "default-model",
-                "CLAUDE_CODE_SUBAGENT_MODEL": "gpt-5.4-mini"
-            }
-        });
-
-        let body = json!({"model": "gpt-5.4-mini[1M]"});
-        let (result, original, mapped) = apply_model_mapping(body, &provider);
-
-        assert_eq!(result["model"], "gpt-5.4-mini[1M]");
-        assert_eq!(original, Some("gpt-5.4-mini[1M]".to_string()));
-        assert!(mapped.is_none());
-    }
-
-    #[test]
-    fn test_no_mapping_configured() {
+    fn no_mapping_keeps_request_model() {
         let provider = create_provider_without_mapping();
         let body = json!({"model": "claude-sonnet-4-5"});
         let (result, original, mapped) = apply_model_mapping(body, &provider);
         assert_eq!(result["model"], "claude-sonnet-4-5");
         assert_eq!(original, Some("claude-sonnet-4-5".to_string()));
         assert!(mapped.is_none());
-    }
-
-    #[test]
-    fn test_case_insensitive() {
-        let provider = create_provider_with_mapping();
-        let body = json!({"model": "Claude-SONNET-4-5"});
-        let (result, _, mapped) = apply_model_mapping(body, &provider);
-        assert_eq!(result["model"], "sonnet-mapped");
-        assert_eq!(mapped, Some("sonnet-mapped".to_string()));
     }
 
     #[test]
@@ -408,7 +222,7 @@ mod tests {
         let mut provider = create_provider_with_mapping();
         provider.settings_config = json!({
             "env": {
-                "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro [1M]"
+                "ANTHROPIC_MODEL": "deepseek-v4-pro [1M]"
             }
         });
 
@@ -417,6 +231,39 @@ mod tests {
         let result = strip_one_m_suffix_for_upstream_from_body(mapped);
 
         assert_eq!(result["model"], "deepseek-v4-pro");
+    }
+
+    #[test]
+    fn gemini_endpoint_model_is_rewritten_but_action_and_query_are_kept() {
+        assert_eq!(
+            rewrite_gemini_endpoint_model(
+                "/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse",
+                "default-model",
+            ),
+            "/v1beta/models/default-model:streamGenerateContent?alt=sse"
+        );
+        assert_eq!(
+            rewrite_gemini_endpoint_model("/v1beta/models/gemini-pro", "models/default-model"),
+            "/v1beta/models/default-model"
+        );
+        // 非 Gemini 形状的路径原样返回
+        assert_eq!(
+            rewrite_gemini_endpoint_model("/v1/chat/completions", "default-model"),
+            "/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn default_model_is_trimmed_and_blank_counts_as_unset() {
+        let mut provider = create_provider_with_mapping();
+        provider.settings_config = json!({ "env": { "ANTHROPIC_MODEL": "  deepseek-v4-pro  " } });
+        assert_eq!(
+            default_model_from_provider(&provider).as_deref(),
+            Some("deepseek-v4-pro")
+        );
+
+        provider.settings_config = json!({ "env": { "ANTHROPIC_MODEL": "   " } });
+        assert_eq!(default_model_from_provider(&provider), None);
     }
 
     #[test]

@@ -17,22 +17,8 @@ export interface AppConfig {
   badgeClass: string;
 }
 
-export const APP_IDS: AppId[] = [
-  "claude",
-  "claude-desktop",
-  "codex",
-  "gemini",
-  "grokbuild",
-  "opencode",
-  "openclaw",
-  "hermes",
-  "pi",
-  "mcode",
-  "kimi",
-  "dsh",
-  "agy",
-  "omp",
-];
+/** 精简后只保留 Claude 一个入口（作为 API 管理入口）。 */
+export const APP_IDS: AppId[] = ["claude"];
 
 export const DEFAULT_VISIBLE_APPS: VisibleApps = {
   claude: true,
@@ -74,62 +60,28 @@ export function orderAppIds(saved: readonly string[] | undefined): AppId[] {
   return ordered;
 }
 
-/** App IDs shown in Skills panels. */
-export const SKILLS_APP_IDS: AppId[] = [
-  "claude",
-  "codex",
-  "gemini",
-  "grokbuild",
-  "opencode",
-  "hermes",
-  "pi",
-  "mcode",
-  "kimi",
-  "dsh",
-  "agy",
-  "omp",
-];
-
-export type ProxyAppId = Extract<
-  AppId,
-  "claude" | "codex" | "gemini" | "grokbuild"
->;
+export type ProxyAppId = "claude";
 
 /** Apps with a complete local gateway + failover data plane. */
-export const PROXY_APP_IDS: ProxyAppId[] = [
-  "claude",
-  "codex",
-  "gemini",
-  "grokbuild",
-];
+export const PROXY_APP_IDS: ProxyAppId[] = ["claude"];
 
 export function isProxyAppId(appId: string): appId is ProxyAppId {
   return (PROXY_APP_IDS as string[]).includes(appId);
 }
 
-/**
- * 有直连 / 路由模式的应用（后端 `AppType::has_route_mode`）：上面四个，加上 Claude Desktop。
- * Desktop 经同一个路由服务转发，但没有故障转移和路由设置（不在 `PROXY_APP_IDS` 里）。
- */
-export type ModeAppId = ProxyAppId | "claude-desktop";
+/** 有路由模式的应用（精简后只剩 Claude）。 */
+export type ModeAppId = ProxyAppId;
 
-export const MODE_APP_IDS: ModeAppId[] = [...PROXY_APP_IDS, "claude-desktop"];
+export const MODE_APP_IDS: ModeAppId[] = [...PROXY_APP_IDS];
 
 export function isModeAppId(appId: string): appId is ModeAppId {
   return (MODE_APP_IDS as string[]).includes(appId);
 }
 
-/** 支持 Stack 模式的应用（后端 `mode::stack::supports_stack` 的镜像）。 */
-export type StackAppId = Extract<
-  ModeAppId,
-  "claude" | "codex" | "claude-desktop"
->;
+/** 支持 Stack（聚合）模式的应用。 */
+export type StackAppId = ProxyAppId;
 
-export const STACK_APP_IDS: StackAppId[] = [
-  "claude",
-  "codex",
-  "claude-desktop",
-];
+export const STACK_APP_IDS: StackAppId[] = ["claude"];
 
 export function isStackAppId(appId: string): appId is StackAppId {
   return (STACK_APP_IDS as string[]).includes(appId);
@@ -140,59 +92,32 @@ export type AdditiveAppId = Extract<
   "opencode" | "openclaw" | "hermes" | "pi" | "mcode" | "kimi" | "dsh" | "omp"
 >;
 
-export const ADDITIVE_APP_IDS: AdditiveAppId[] = [
-  "mcode",
-  "kimi",
-  "dsh",
-  "opencode",
-  "openclaw",
-  "hermes",
-  "pi",
-  "omp",
-];
+/** 精简后不再有累加式客户端。 */
+export const ADDITIVE_APP_IDS: AdditiveAppId[] = [];
 
 export function isAdditiveAppId(appId: string): appId is AdditiveAppId {
   return (ADDITIVE_APP_IDS as string[]).includes(appId);
 }
 
-/** Oh My Pi 是 Pi 的分支：供应商表单、启用状态和用量脚本命令与 Pi 共用。 */
-export const PI_FAMILY_APP_IDS: PiFamilyAppId[] = ["pi", "omp"];
+/** Oh My Pi 是 Pi 的分支；精简后不再有 Pi 家族。 */
+export const PI_FAMILY_APP_IDS: PiFamilyAppId[] = [];
 
-export function isPiFamilyApp(appId: string): appId is PiFamilyAppId {
-  return (PI_FAMILY_APP_IDS as string[]).includes(appId);
+export function isPiFamilyApp(_appId: string): _appId is PiFamilyAppId {
+  return false;
 }
 
 /**
  * 切换只替换关键字段的应用：供应商编辑器显示「切到这个供应商之后配置文件的样子」，由后端
  * `ProviderService::editor_view` 投影。
  */
-export const EDITOR_VIEW_APP_IDS: AppId[] = [
-  "claude",
-  "codex",
-  "gemini",
-  "grokbuild",
-];
+export const EDITOR_VIEW_APP_IDS: AppId[] = ["claude"];
 
 export function usesEditorView(appId: AppId): boolean {
   return EDITOR_VIEW_APP_IDS.includes(appId);
 }
 
-/** Claude Desktop、OpenClaw 不由 CC Switch 管理 MCP；Pi 1.0 起内置 MCP（`~/.pi/agent/mcp.json`） */
-export type McpAppId = Exclude<AppId, "claude-desktop" | "openclaw">;
-export const MCP_APP_IDS: McpAppId[] = [
-  "claude",
-  "codex",
-  "gemini",
-  "grokbuild",
-  "opencode",
-  "hermes",
-  "pi",
-  "mcode",
-  "kimi",
-  "dsh",
-  "agy",
-  "omp",
-];
+type McpAppId = Exclude<AppId, "claude-desktop" | "openclaw">;
+export const MCP_APP_IDS: McpAppId[] = [];
 
 export function isMcpAppId(appId: string): appId is McpAppId {
   return (MCP_APP_IDS as string[]).includes(appId);

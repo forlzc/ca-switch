@@ -44,7 +44,7 @@ describe("NewLayoutDialog", () => {
     mocks.getAll
       .mockReset()
       .mockImplementation(async (app: string) =>
-        app === "codex" ? { p1: { id: "p1" } } : {},
+        app === "claude" ? { p1: { id: "p1" } } : {},
       );
   });
 

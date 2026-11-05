@@ -2,7 +2,7 @@ use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
 
-use cc_switch_lib::{AppError, AppType, ConfigService, MultiAppConfig, Provider};
+use ca_switch_lib::{AppError, AppType, ConfigService, MultiAppConfig, Provider};
 
 #[path = "support.rs"]
 mod support;

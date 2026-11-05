@@ -1,7 +1,7 @@
 #![allow(dead_code)] // 测试辅助函数按需使用
 use serde_json::json;
 
-use cc_switch_lib::{
+use ca_switch_lib::{
     read_json_file, write_codex_live_atomic, AppType, MultiAppConfig, Provider, ProviderService,
 };
 
@@ -88,7 +88,7 @@ requires_openai_auth = true
         .expect("switch provider should succeed");
 
     let config_text =
-        std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config.toml");
+        std::fs::read_to_string(ca_switch_lib::get_codex_config_path()).expect("read config.toml");
     let parsed: toml::Value = toml::from_str(&config_text).expect("parse config.toml");
 
     assert_eq!(
@@ -234,7 +234,7 @@ requires_openai_auth = true
         .expect("switch to bridge provider should succeed");
 
     let auth_value: serde_json::Value =
-        read_json_file(&cc_switch_lib::get_codex_auth_path()).expect("read auth.json");
+        read_json_file(&ca_switch_lib::get_codex_auth_path()).expect("read auth.json");
     assert_eq!(
         auth_value.get("auth_mode").and_then(|v| v.as_str()),
         Some("chatgpt")
@@ -254,7 +254,7 @@ requires_openai_auth = true
     );
 
     let live_config =
-        std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config.toml");
+        std::fs::read_to_string(ca_switch_lib::get_codex_config_path()).expect("read config.toml");
     let parsed_live: toml::Value = toml::from_str(&live_config).expect("parse live config");
     assert_eq!(
         parsed_live.get("model_provider").and_then(|v| v.as_str()),
@@ -384,12 +384,12 @@ requires_openai_auth = true
         .expect("switch to third-party provider should succeed");
 
     assert!(
-        !cc_switch_lib::get_codex_auth_path().exists(),
+        !ca_switch_lib::get_codex_auth_path().exists(),
         "default (preservation off) must delete auth.json on a third-party switch — \
          the official login goes away and the key rides in config.toml instead"
     );
     let live_config =
-        std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config.toml");
+        std::fs::read_to_string(ca_switch_lib::get_codex_config_path()).expect("read config.toml");
     assert!(
         live_config.contains("experimental_bearer_token = \"third-party-key\""),
         "the third-party key must be injected as the provider-scoped bearer token; got:\n{live_config}"
@@ -441,12 +441,12 @@ requires_openai_auth = false
         .expect("switch to third-party provider should succeed");
 
     assert!(
-        !cc_switch_lib::get_codex_auth_path().exists(),
+        !ca_switch_lib::get_codex_auth_path().exists(),
         "third-party switches are config-only: no auth.json is written"
     );
 
     let live_config =
-        std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config.toml");
+        std::fs::read_to_string(ca_switch_lib::get_codex_config_path()).expect("read config.toml");
     assert!(
         live_config.contains("experimental_bearer_token = \"third-party-key\""),
         "default switch must inject the API key into config.toml so Codex >= 0.149 \
@@ -551,7 +551,7 @@ openai_base_url = "https://relay.example/v1"
         .expect("legacy reroute shape must be normalized, not rejected");
 
     let live_config =
-        std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config.toml");
+        std::fs::read_to_string(ca_switch_lib::get_codex_config_path()).expect("read config.toml");
     assert!(
         !live_config.contains("openai_base_url"),
         "the top-level reroute must be rewritten away; got:\n{live_config}"
@@ -564,7 +564,7 @@ openai_base_url = "https://relay.example/v1"
     );
 
     let auth_value: serde_json::Value =
-        read_json_file(&cc_switch_lib::get_codex_auth_path()).expect("read auth.json");
+        read_json_file(&ca_switch_lib::get_codex_auth_path()).expect("read auth.json");
     assert_eq!(
         auth_value
             .pointer("/tokens/access_token")
@@ -616,7 +616,7 @@ experimental_bearer_token = "config-carried-key"
         .expect("legacy reroute with a config-carried token must be normalized");
 
     let live_config =
-        std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config.toml");
+        std::fs::read_to_string(ca_switch_lib::get_codex_config_path()).expect("read config.toml");
     assert!(
         !live_config.contains("openai_base_url"),
         "the top-level reroute must be rewritten away; got:\n{live_config}"
@@ -626,7 +626,7 @@ experimental_bearer_token = "config-carried-key"
         "the custom provider table must be created; got:\n{live_config}"
     );
     assert_eq!(
-        cc_switch_lib::extract_codex_experimental_bearer_token(&live_config).as_deref(),
+        ca_switch_lib::extract_codex_experimental_bearer_token(&live_config).as_deref(),
         Some("config-carried-key"),
         "the config-carried key must resolve for the rewritten provider; got:\n{live_config}"
     );
@@ -672,11 +672,11 @@ openai_base_url = "https://relay.example/v1"
         .expect("default-path switch must normalize the legacy ambient-auth shape");
 
     assert!(
-        !cc_switch_lib::get_codex_auth_path().exists(),
+        !ca_switch_lib::get_codex_auth_path().exists(),
         "third-party switches are config-only: no auth.json is written"
     );
     let live_config =
-        std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config.toml");
+        std::fs::read_to_string(ca_switch_lib::get_codex_config_path()).expect("read config.toml");
     assert!(
         !live_config.contains("openai_base_url")
             && live_config.contains("[model_providers.custom]")
@@ -818,7 +818,7 @@ http_headers = { Authorization = "Bearer explicit-header-token" }
         .expect("preservation-on switch must keep supporting keyless header-auth providers");
 
     let config_text =
-        std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config.toml");
+        std::fs::read_to_string(ca_switch_lib::get_codex_config_path()).expect("read config.toml");
     assert!(
         config_text.contains("Authorization = \"Bearer explicit-header-token\""),
         "the provider's own Authorization header must be written verbatim; got:\n{config_text}"
@@ -890,7 +890,7 @@ requires_openai_auth = true
         .expect("switch to official provider should succeed without API key");
 
     let auth_value: serde_json::Value =
-        read_json_file(&cc_switch_lib::get_codex_auth_path()).expect("read auth.json");
+        read_json_file(&ca_switch_lib::get_codex_auth_path()).expect("read auth.json");
     assert_eq!(
         auth_value.get("auth_mode").and_then(|v| v.as_str()),
         Some("chatgpt")
@@ -910,7 +910,7 @@ requires_openai_auth = true
     );
 
     let live_config =
-        std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config.toml");
+        std::fs::read_to_string(ca_switch_lib::get_codex_config_path()).expect("read config.toml");
     assert!(
         !live_config.contains("experimental_bearer_token"),
         "official login provider has no API key to inject"
@@ -981,7 +981,7 @@ requires_openai_auth = true
         .expect("switch to official provider should succeed");
 
     assert!(
-        !cc_switch_lib::get_codex_auth_path().exists(),
+        !ca_switch_lib::get_codex_auth_path().exists(),
         "switching to a material-less official provider must delete the stale \
          third-party auth.json so Codex shows its login screen"
     );
@@ -1002,7 +1002,7 @@ requires_openai_auth = true
     );
 
     let live_config =
-        std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config.toml");
+        std::fs::read_to_string(ca_switch_lib::get_codex_config_path()).expect("read config.toml");
     assert!(
         !live_config.contains("experimental_bearer_token"),
         "official provider has no API key to inject"
@@ -1048,7 +1048,7 @@ fn provider_service_reswitch_current_official_keeps_live_auth() {
         .expect("re-switch to current official provider should succeed");
 
     let auth_value: serde_json::Value =
-        read_json_file(&cc_switch_lib::get_codex_auth_path()).expect("auth.json must survive");
+        read_json_file(&ca_switch_lib::get_codex_auth_path()).expect("auth.json must survive");
     assert_eq!(
         auth_value.get("OPENAI_API_KEY").and_then(|v| v.as_str()),
         Some("residue-key"),
@@ -1063,18 +1063,18 @@ fn read_codex_live_settings_tolerates_missing_auth_when_config_file_exists() {
     let _home = ensure_test_home();
 
     assert!(
-        cc_switch_lib::read_codex_live_settings().is_err(),
+        ca_switch_lib::read_codex_live_settings().is_err(),
         "both files missing is still 'no live install'"
     );
 
     // auth.json deleted + empty config.toml is the exact state the official
     // switch cleanup leaves behind; it must stay readable or the next
     // backfill / hot switch would treat Codex as uninstalled.
-    let config_path = cc_switch_lib::get_codex_config_path();
+    let config_path = ca_switch_lib::get_codex_config_path();
     std::fs::create_dir_all(config_path.parent().expect("codex dir")).expect("create codex dir");
     std::fs::write(&config_path, "").expect("write empty config.toml");
 
-    let live = cc_switch_lib::read_codex_live_settings()
+    let live = ca_switch_lib::read_codex_live_settings()
         .expect("config file present but empty must be readable");
     assert_eq!(live.get("auth"), Some(&json!({})));
     assert_eq!(live.get("config").and_then(|v| v.as_str()), Some(""));

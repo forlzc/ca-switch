@@ -436,12 +436,7 @@ describe("DeepLinkImportDialog", () => {
     it.each([
       {
         resource: "provider",
-        app: "opencode",
-      },
-      {
-        resource: "prompt",
         app: "claude",
-        content: btoa("# review"),
         enabled: true,
       },
     ])(
@@ -535,47 +530,6 @@ describe("DeepLinkImportDialog", () => {
       expect(sent[0].enabled).toBe(false);
     });
 
-    it("adds additive-app providers to the app config unless the link opts out", async () => {
-      render(<DeepLinkImportDialog />, { wrapper: Wrapper });
-      act(() => deliverDeepLink(providerLink({ app: "opencode" })));
-
-      const toggle = await screen.findByRole("switch");
-      expect(toggle).toBeChecked();
-      expect(
-        screen.getByText("deeplink.addToAppAfterImport"),
-      ).toBeInTheDocument();
-      // 累加式应用没有「切换」，不提示改发请求
-      expect(
-        screen.queryByText("deeplink.providerEnabledWarning"),
-      ).not.toBeInTheDocument();
-    });
-
-    it("lets the user decide whether an imported prompt is enabled", async () => {
-      const sent = captureImport();
-      const user = userEvent.setup();
-      render(<DeepLinkImportDialog />, { wrapper: Wrapper });
-      act(() =>
-        deliverDeepLink({
-          version: "v1",
-          resource: "prompt",
-          app: "claude",
-          name: "Review Prompt",
-          content: btoa("# review"),
-          enabled: true,
-        }),
-      );
-
-      const toggle = await screen.findByRole("switch");
-      expect(toggle).toBeChecked();
-      expect(
-        screen.getByText("deeplink.prompt.enabledWarning"),
-      ).toBeInTheDocument();
-
-      await user.click(toggle);
-      await user.click(screen.getByRole("button", { name: "deeplink.import" }));
-      await waitFor(() => expect(sent).toHaveLength(1));
-      expect(sent[0].enabled).toBe(false);
-    });
   });
 
   describe("the link's iconUrl", () => {

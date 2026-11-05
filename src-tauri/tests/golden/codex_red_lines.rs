@@ -49,7 +49,7 @@ use std::time::SystemTime;
 use serde_json::{json, Value};
 use toml::Table;
 
-use cc_switch_lib::{
+use ca_switch_lib::{
     get_codex_auth_path, get_codex_config_path, update_settings, AppError, AppSettings, AppState,
     AppType, Provider, ProviderMeta, ProviderService,
 };

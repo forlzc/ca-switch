@@ -309,13 +309,17 @@ pub fn get_claude_settings_path() -> PathBuf {
     settings
 }
 
-/// 获取应用配置目录路径 (~/.cc-switch)
+/// 获取应用配置目录路径 (~/.ca-switch)
 pub fn get_app_config_dir() -> PathBuf {
     if let Some(custom) = crate::app_store::get_app_config_dir_override() {
         return custom;
     }
 
-    let default_dir = get_home_dir().join(".cc-switch");
+    let default_dir = get_home_dir().join(".ca-switch");
+
+    // P5：从旧品牌数据目录（~/.cc-switch）一次性复制数据库。
+    // 只在新目录还没有自己的数据库时执行，避免覆盖已经用起来的新库。
+    migrate_legacy_config_dir(&default_dir, &get_home_dir().join(".cc-switch"));
 
     // 兼容 v3.10.3：当用户环境存在 `HOME` 且与真实用户目录不同，
     // v3.10.3 可能在 `HOME/.cc-switch/` 下创建/使用了数据库。
@@ -333,19 +337,24 @@ pub fn get_app_config_dir() -> PathBuf {
 
     #[cfg(windows)]
     {
-        let default_db = default_dir.join("cc-switch.db");
+        let default_db = default_dir.join("ca-switch.db");
         if !default_db.exists() {
             if let Ok(home_env) = std::env::var("HOME") {
                 let trimmed = home_env.trim();
                 if !trimmed.is_empty() {
-                    let legacy_dir = PathBuf::from(trimmed).join(".cc-switch");
-                    if legacy_dir.join("cc-switch.db").exists() {
-                        log::info!(
-                            "Detected v3.10.3 legacy database at {}, using it instead of {}",
-                            legacy_dir.display(),
-                            default_dir.display()
-                        );
-                        return legacy_dir;
+                    let legacy_home = PathBuf::from(trimmed);
+                    for legacy_dir in [legacy_home.join(".cc-switch"), legacy_home.join(".ca-switch")] {
+                        if legacy_dir.join("cc-switch.db").exists()
+                            || legacy_dir.join("ca-switch.db").exists()
+                        {
+                            log::info!(
+                                "Detected legacy database at {}, copying it into {}",
+                                legacy_dir.display(),
+                                default_dir.display()
+                            );
+                            migrate_legacy_config_dir(&default_dir, &legacy_dir);
+                            break;
+                        }
                     }
                 }
             }
@@ -353,6 +362,42 @@ pub fn get_app_config_dir() -> PathBuf {
     }
 
     default_dir
+}
+
+/// 把旧品牌目录里的数据库复制到新目录。
+///
+/// 只在两个条件同时成立时动作：新目录没有数据库、旧目录有数据库。
+/// 复制失败只记录，不阻塞启动（最坏情况是用户看到空列表，而不是应用起不来）。
+fn migrate_legacy_config_dir(new_dir: &Path, legacy_dir: &Path) {
+    if new_dir.join("ca-switch.db").exists() || !legacy_dir.is_dir() {
+        return;
+    }
+    let legacy_db = if legacy_dir.join("ca-switch.db").exists() {
+        legacy_dir.join("ca-switch.db")
+    } else {
+        legacy_dir.join("cc-switch.db")
+    };
+    if !legacy_db.exists() {
+        return;
+    }
+    if let Err(error) = std::fs::create_dir_all(new_dir) {
+        eprintln!(
+            "创建配置目录失败 ({}): {error}",
+            new_dir.display()
+        );
+        return;
+    }
+    match std::fs::copy(&legacy_db, new_dir.join("ca-switch.db")) {
+        Ok(_) => eprintln!(
+            "已从旧数据目录迁移数据库: {} -> {}",
+            legacy_db.display(),
+            new_dir.join("ca-switch.db").display()
+        ),
+        Err(error) => eprintln!(
+            "迁移旧数据库失败 ({}): {error}",
+            legacy_db.display()
+        ),
+    }
 }
 
 /// 获取应用配置文件路径
@@ -1023,9 +1068,9 @@ mod tests {
 
         // 假装 HOME 指向另一处，并且那里有一份 db——正是会触发回退的形状
         let legacy_home = tempfile::tempdir().expect("tempdir");
-        let legacy_dir = legacy_home.path().join(".cc-switch");
+        let legacy_dir = legacy_home.path().join(".ca-switch");
         std::fs::create_dir_all(&legacy_dir).expect("create legacy dir");
-        std::fs::write(legacy_dir.join("cc-switch.db"), b"legacy").expect("seed legacy db");
+        std::fs::write(legacy_dir.join("ca-switch.db"), b"legacy").expect("seed legacy db");
 
         let test_home = tempfile::tempdir().expect("tempdir");
         let saved_home = std::env::var_os("HOME");
@@ -1045,7 +1090,7 @@ mod tests {
             None => std::env::remove_var("HOME"),
         }
 
-        let expected = test_home.path().join(".cc-switch");
+        let expected = test_home.path().join(".ca-switch");
         assert_eq!(
             dir, expected,
             "测试 home 优先：不得回退到 HOME 下的旧库目录"

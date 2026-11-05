@@ -4,18 +4,14 @@ import { useQuery } from "@tanstack/react-query";
 import { getVersion } from "@tauri-apps/api/app";
 import {
   ArrowLeft,
-  BookOpen,
   ChartColumn,
   ChevronsLeft,
   ChevronsRight,
   Database,
   Folder,
   Globe,
-  History,
   Info,
-  KeyRound,
   Layers,
-  LayoutGrid,
   Route,
   Settings,
   SlidersHorizontal,
@@ -58,8 +54,6 @@ interface SidebarProps {
   onSelectPage: (page: GlobalPage | "settings") => void;
   onSelectSettingsSection: (section: SettingsSection) => void;
   onExitSettings: () => void;
-  /** 打开了「启动时检查应用更新」并且查到了新版本 */
-  appsUpdateAvailable?: boolean;
 }
 
 type DirectoryProps = SidebarProps & { collapsed: boolean };
@@ -212,20 +206,13 @@ function MainDirectory({
   visibleApps,
   onSelectApp,
   onSelectPage,
-  appsUpdateAvailable = false,
 }: DirectoryProps) {
   const { t, i18n } = useTranslation();
   const { moneyShort } = useMoneyFormat();
   const { data: settings } = useSettingsQuery();
   const { hasUpdate } = useUpdate();
-  const {
-    appStatus,
-    todayCost,
-    todayTokens,
-    todayRequests,
-    todayHitRate,
-    authNeedsAttention,
-  } = useSidebarStatus();
+  const { appStatus, todayCost, todayTokens, todayRequests, todayHitRate } =
+    useSidebarStatus();
   // 顺序跟应用页拖出来的一致
   const apps = orderAppIds(settings?.appOrder).filter(
     (app) => visibleApps[app],
@@ -271,14 +258,6 @@ function MainDirectory({
     trailingLabel?: string;
     alert?: string;
   }[] = [
-    { page: "prompts", label: t("nav.prompts"), icon: BookOpen },
-    { page: "sessions", label: t("nav.sessions"), icon: History },
-    {
-      page: "auth",
-      label: t("nav.auth"),
-      icon: KeyRound,
-      alert: authNeedsAttention ? t("nav.authNeedsReauth") : undefined,
-    },
     {
       page: "usage",
       label: t("nav.usage"),
@@ -351,22 +330,9 @@ function MainDirectory({
       <div
         className={cn(
           "flex shrink-0 pb-2",
-          // 收起时竖排，和上面全局项一样无间隙
           collapsed ? "flex-col" : "gap-1 px-2",
         )}
       >
-        <NavItem
-          collapsed={collapsed}
-          compact={!collapsed}
-          selected={view === "apps"}
-          icon={LayoutGrid}
-          label={t("nav.apps")}
-          title={
-            appsUpdateAvailable ? t("nav.appsHasUpdate") : t("nav.appsTitle")
-          }
-          dot={appsUpdateAvailable}
-          onClick={() => onSelectPage("apps")}
-        />
         <NavItem
           collapsed={collapsed}
           compact={!collapsed}

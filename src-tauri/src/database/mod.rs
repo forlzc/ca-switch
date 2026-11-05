@@ -51,7 +51,7 @@ use std::sync::Mutex;
 
 /// 当前 Schema 版本号
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 25;
+pub(crate) const SCHEMA_VERSION: i32 = 26;
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
@@ -199,6 +199,14 @@ impl Database {
             log_count_cache: Mutex::new(None),
         };
         db.create_tables()?;
+        // `create_tables` 建的就是最新 schema，但不会写 user_version。
+        // 不写入的话，内存库导出的 SQL 会带 `user_version=0`，导入时被当成
+        // 「全新旧库」重新跑一遍全部迁移，v25 的命名空间收敛会把刚导出的
+        // 供应商行再折一次（测试里表现为导入后 providers 为空）。
+        {
+            let conn = lock_conn!(db.conn);
+            Self::set_user_version(&conn, SCHEMA_VERSION)?;
+        }
         db.ensure_model_pricing_seeded()?;
 
         Ok(db)

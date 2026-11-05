@@ -9,8 +9,6 @@ import type {
   ProxyStack,
   ProxyStackNotice,
   CodexDaemonRestartOutcome,
-  AppModeView,
-  StartupAttachFailure,
 } from "@/types/proxy";
 
 export const proxyApi = {
@@ -66,27 +64,6 @@ export const proxyApi = {
     providerId: string,
   ): Promise<RouteSwitchResult> {
     return invoke("set_proxy_route", { appType, providerId });
-  },
-
-  // 应用页模式行：生效的模式、路由目标（直连时是上次路由的那家）、直连那家
-  async getAppMode(appType: string): Promise<AppModeView> {
-    return invoke("get_app_mode", { appType });
-  },
-
-  // 启动时没能接上代理、已退回直连的应用（取一次就清空）
-  async takeStartupAttachFailures(): Promise<StartupAttachFailure[]> {
-    return invoke("take_startup_attach_failures");
-  },
-
-  // 设置里在路由和 Stack 之间换时：处于另一种模式（stack 为真是 Stack 模式）的 Claude Code、
-  // Codex 先退回直连。返回退回直连的应用
-  async exitProxyAppsInMode(stack: boolean): Promise<string[]> {
-    return invoke("exit_proxy_apps_in_mode", { stack });
-  },
-
-  // 直连供应商：路由模式下退出路由时写回的那家（和路由到的那家互相独立）
-  async getDirectProvider(appType: string): Promise<string | null> {
-    return invoke("get_direct_provider", { appType });
   },
 
   // ========== Stack 模型 API ==========

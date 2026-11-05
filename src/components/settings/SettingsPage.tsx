@@ -69,10 +69,6 @@ interface SettingsPageProps {
   /** 从应用页的「配置目录」进入时，定位到该应用的配置区域。 */
   appConfigScrollTarget?: AppId;
   onImportSuccess?: () => void | Promise<void>;
-  /** 「在侧栏显示哪些应用」跳到「应用」页 */
-  onOpenApps: () => void;
-  /** 本地路由 →「正在使用路由的应用」的「前往」 */
-  onOpenApp: (app: AppId) => void;
 }
 
 /**
@@ -83,8 +79,6 @@ export function SettingsPage({
   section,
   appConfigScrollTarget,
   onImportSuccess,
-  onOpenApps,
-  onOpenApp,
 }: SettingsPageProps) {
   const { t } = useTranslation();
   const {
@@ -369,11 +363,7 @@ export function SettingsPage({
     switch (section) {
       case "general":
         return (
-          <GeneralSection
-            settings={settings}
-            onAutoSave={handleAutoSave}
-            onOpenApps={onOpenApps}
-          />
+          <GeneralSection settings={settings} onAutoSave={handleAutoSave} />
         );
       case "appConfig":
         return (
@@ -390,7 +380,7 @@ export function SettingsPage({
           />
         );
       case "routing":
-        return <RoutingSection onOpenApp={onOpenApp} />;
+        return <RoutingSection />;
       case "network":
         return (
           <SettingsBlock

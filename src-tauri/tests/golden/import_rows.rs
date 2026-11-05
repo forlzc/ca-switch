@@ -3,7 +3,7 @@
 //! 重构不动数据库（不升 schema、不回填、不剥离存量行），降级后旧版直接读这些行，
 //! 所以新增供应商时写进 DB 的字节要保持原样。
 
-use cc_switch_lib::{import_provider_from_deeplink, parse_deeplink_url, AppType};
+use ca_switch_lib::{import_provider_from_deeplink, parse_deeplink_url, AppType};
 
 use crate::support::{create_test_state, reset_test_fs, test_mutex};
 use crate::util::{assert_golden, dump_provider_rows, write_home_file};

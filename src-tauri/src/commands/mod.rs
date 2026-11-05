@@ -25,10 +25,8 @@ mod openclaw;
 mod pi;
 mod plugin;
 mod profile;
-mod prompt;
 mod provider;
 mod proxy;
-mod session_manager;
 mod settings;
 mod stream_check;
 mod subscription;
@@ -39,7 +37,6 @@ mod lightweight;
 mod s3_sync;
 mod usage;
 mod webdav_sync;
-mod workspace;
 
 #[cfg(test)]
 mod provider_concurrency_tests;
@@ -71,10 +68,8 @@ pub use openclaw::*;
 pub(crate) use pi::*;
 pub use plugin::*;
 pub use profile::*;
-pub use prompt::*;
 pub use provider::*;
 pub use proxy::*;
-pub use session_manager::*;
 pub use settings::*;
 pub use stream_check::*;
 pub use subscription::*;
@@ -84,7 +79,6 @@ pub use lightweight::*;
 pub use s3_sync::*;
 pub use usage::*;
 pub use webdav_sync::*;
-pub use workspace::*;
 
 #[cfg(not(target_os = "windows"))]
 #[allow(unused_imports)] // 仅被 `#[cfg(test)]` 下的工具探测用例使用

@@ -220,8 +220,8 @@ describe("SettingsPage", () => {
     expect(screen.getByText("global-proxy-settings")).toBeInTheDocument();
   });
 
-  it("saves general switches immediately and links to the Apps page", async () => {
-    const { props } = renderSettingsPage();
+  it("saves general switches immediately", async () => {
+    renderSettingsPage();
 
     fireEvent.click(
       screen.getByRole("switch", { name: "settings.minimizeToTray" }),
@@ -243,11 +243,6 @@ describe("SettingsPage", () => {
         checkToolUpdatesOnStartup: true,
       }),
     );
-
-    fireEvent.click(
-      screen.getByRole("button", { name: /settings\.general\.goToApps/ }),
-    );
-    expect(props.onOpenApps).toHaveBeenCalledTimes(1);
   });
 
   it("rolls a failed autosave back and reports it", async () => {

@@ -49,6 +49,16 @@ impl Protocol {
         }
     }
 
+    /// 面向用户的中文名称，只用于 501 文案与界面提示。
+    pub const fn label(self) -> &'static str {
+        match self {
+            Protocol::Anthropic => "Anthropic Messages",
+            Protocol::OpenAiChat => "OpenAI Chat Completions",
+            Protocol::OpenAiResponses => "OpenAI Responses",
+            Protocol::Gemini => "Gemini generateContent",
+        }
+    }
+
     /// 兼容旧 `ProviderMeta::api_format` 的取值。
     ///
     /// 旧值域是 `anthropic | openai_chat | openai_responses | gemini_native`，
@@ -250,10 +260,27 @@ impl Matrix {
                 response: "anthropic_response_to_responses",
                 wiring: "proxy/providers/transform_codex_anthropic.rs",
             }),
-            // 其余 7 格没有转换器。需求 4（chat 入口 → responses 上游）就在这里，
-            // 由 P4 补 chat_request_to_responses + responses_response_to_chat。
+            // Chat 入口 → Responses 上游（P4 补齐，见 `transform_chat_responses.rs`
+            // 与 `streaming_responses_chat.rs`）。
+            (OpenAiChat, OpenAiResponses) => Conversion::Convert(Transform {
+                request: "chat_request_to_responses",
+                response: "responses_response_to_chat",
+                wiring: "proxy/providers/transform_chat_responses.rs",
+            }),
+            // 其余 6 格永远不做，返回 501 + 可读文案。
             _ => Conversion::Unsupported,
         }
+    }
+
+    /// 501 文案：入口协议与上游协议之间没有可用转换器。
+    ///
+    /// 文案放在这里而不是各调用点，保证返回给客户端的说明与矩阵始终一致。
+    pub fn unsupported_message(inbound: Protocol, upstream: Protocol) -> String {
+        format!(
+            "当前入口使用 {} 协议，激活的供应商是 {} 协议，两者之间没有可用的转换器。请切换供应商，或改用与该供应商协议匹配的入口。",
+            inbound.label(),
+            upstream.label()
+        )
     }
 
     /// 当前所有不支持的格子，按入口协议分组。UI 的能力提示与 501 文案都从
@@ -592,7 +619,7 @@ mod tests {
     /// 12 格 = 4×4 − 4 个同协议。这张表是唯一权威：以后谁动了转换函数，
     /// 这里会红，不允许再靠记忆判断「有没有转换器」。
     #[test]
-    fn matrix_covers_exactly_five_cells() {
+    fn matrix_covers_exactly_six_cells() {
         use Protocol::*;
         let expected_convert = [
             (Anthropic, OpenAiChat),
@@ -600,6 +627,7 @@ mod tests {
             (Anthropic, Gemini),
             (OpenAiResponses, OpenAiChat),
             (OpenAiResponses, Anthropic),
+            (OpenAiChat, OpenAiResponses),
         ];
 
         let mut passthrough = 0;
@@ -616,22 +644,25 @@ mod tests {
         }
 
         assert_eq!(passthrough, 4, "同协议四格应为透传");
-        assert_eq!(convert.len(), 5, "现网只接了 5 个转换方向");
-        assert_eq!(unsupported.len(), 7, "12 - 4 - 5");
+        assert_eq!(convert.len(), 6, "P4 之后接了 6 个转换方向");
+        assert_eq!(unsupported.len(), 6, "16 - 4 - 6");
         for cell in expected_convert {
             assert!(convert.contains(&cell), "缺了 {cell:?} 的转换接线");
         }
-        assert_eq!(Matrix::unsupported_cells().len(), 7);
+        assert_eq!(Matrix::unsupported_cells().len(), 6);
     }
 
-    /// 需求 4 落在哪一格，用断言固定下来，避免再靠口头记忆。
+    /// 需求 4：chat 入口 → responses 上游必须已经接通。
     #[test]
-    fn chat_entry_to_responses_upstream_is_the_p4_gap() {
-        assert_eq!(
-            Matrix::plan(Protocol::OpenAiChat, Protocol::OpenAiResponses),
-            Conversion::Unsupported
-        );
-        // 反向（responses 入口 → chat 上游）现网是通的
+    fn chat_entry_to_responses_upstream_is_connected() {
+        let Conversion::Convert(transform) =
+            Matrix::plan(Protocol::OpenAiChat, Protocol::OpenAiResponses)
+        else {
+            panic!("chat → responses 必须是 Convert");
+        };
+        assert_eq!(transform.request, "chat_request_to_responses");
+        assert_eq!(transform.response, "responses_response_to_chat");
+        // 反向（responses 入口 → chat 上游）同样保持可用
         assert!(matches!(
             Matrix::plan(Protocol::OpenAiResponses, Protocol::OpenAiChat),
             Conversion::Convert(_)
