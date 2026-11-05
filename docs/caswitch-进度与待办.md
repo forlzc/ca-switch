@@ -165,28 +165,34 @@ P0–P1 与 P2 的 **2a、2b-1、2e（含 2d）、2b-2** 已全部落地并逐�
 ### 推送阻塞记录（2026-11-05）
 
 本地部分已全部完成：分支 `caswitch` → `ca-switch`、进度文档提交、工作区干净。
-推送到 `origin/ca-switch` 被阻，**根因是凭据类型，不是代码或网络**：
+推送到 `origin/ca-switch` 被阻，**根因是凭据无效或授权范围不足，不是代码或网络**：
 
-- 系统 GitHub 连接器发放的是 GitHub App 用户令牌（`ghu_` 前缀）。REST 查询
-  `GET /repos/forlzc/cc-switch` 返回 `permissions.push = true`，但用该令牌做 git HTTPS 写操作
-  一律返回 `remote: Permission to forlzc/cc-switch.git denied to forlzc`（403）。
-  `oauth2` / `x-access-token` 用户名、URL 内嵌凭据三种方式均试过，结果一致。
-- 另有间歇性的 `github.com:443` 连接超时（`api.github.com` 始终可用，属沙箱网络波动）；
-  其中一次连接成功并返回 403，足以排除纯网络原因。
-- 随后改用用户提供的一枚 fine-grained PAT（`github_pat_` 前缀、93 字符，格式完整）：
-  REST 以 `Bearer` / `token` / Basic 三种方式均返回 `401 Bad credentials`，git 端返回
-  `Invalid username or token. Password authentication is not supported for Git operations`。
-  判定为该 PAT 本身无效（未生效 / 已撤销 / 复制有误），不是权限范围问题。
+- 系统 GitHub 连接器的 App 用户令牌（`ghu_` 前缀）：git HTTPS 写一律返回
+  `Permission to forlzc/cc-switch.git denied to forlzc`（403）。
+- 第一枚用户提供的 fine-grained PAT（`github_pat_`、93 字符）：REST `Bearer` / `token` / Basic
+  均 `401 Bad credentials`，git 端 `Invalid username or token` → **令牌本身无效**。
+- 第二枚 fine-grained PAT：REST `/user` 返回 200（有效），但 git 写仍是 403；
+  用可逆的 REST 写探测（创建 + 立即删除临时 ref，未留下任何远端对象）得到
+  `403 Resource not accessible by personal access token` → **令牌有效，但授权范围不含该仓库的写权限**。
+- 间歇性 `github.com:443` 连接超时（`api.github.com` 始终可用），但多次连接成功并返回明确的
+  401 / 403，足以排除纯网络原因。
 
-**解除方式（二选一）**：
+> ⚠️ **判据陷阱**：REST `GET /repos/...` 返回的 `permissions.push = true` 反映的是**账号**
+> 对该仓库的权限（owner 全为 true），**不是** fine-grained PAT 被授予的范围。
+> 判断 PAT 能否 push，必须看 git 端点或 REST 写操作的返回码。
 
-1. 重新生成一枚有效 PAT：classic PAT（`ghp_`）勾 `repo`；或 fine-grained PAT 选
-   `forlzc/cc-switch` 仓库 + `Contents: Read & Write`，确认已生效并完整复制；
-2. 或在 CodeBuddy 设置 → 连接器 重新授权 GitHub，确保授予目标仓库 Contents 读写。
+**解除方式（推荐顺序）**：
+
+1. **classic PAT（`ghp_`）勾 `repo` scope** —— 最稳，覆盖所有仓库（含 fork），
+   不受 fine-grained 的仓库选择限制；
+2. fine-grained PAT：Resource owner `forlzc`、Repository access 选 **All repositories**
+   （`cc-switch` 是 fork，常不在「Only select repositories」列表里）、
+   Permissions → **Contents: Read and Write**、确认已生效并完整复制；
+3. 或在 CodeBuddy 设置 → 连接器重新授权 GitHub，并确保授权清单包含 `cc-switch` 与 Contents 写权限。
 
 凭据均用临时环境变量注入，执行 `git push -u origin ca-switch`，不写入仓库配置。
 
-> 🔒 已明文出现在对话中的那枚 PAT 建议立即在 GitHub 设置里撤销：GitHub 会扫描泄露的
+> 🔒 已明文出现在对话中的两枚 PAT 建议立即在 GitHub 设置里撤销：GitHub 会扫描泄露的
 > 密钥并可能自动令其失效，明文令牌也不宜再次使用。
 
 > ⚠️ 本地 `ca-switch` 原本仍跟踪 `origin/fork/build`（历史遗留），无参数 `git push` 会推到
