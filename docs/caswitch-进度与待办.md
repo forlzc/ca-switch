@@ -2,7 +2,7 @@
 
 > 更新时间：2026-11-05 16:49（GMT+8）
 > 仓库：`/workspace/cc-switch`　远端：`https://github.com/forlzc/cc-switch.git`
-> 分支：`caswitch` → 本轮改名 **`ca-switch`**
+> 分支：`caswitch` → **`ca-switch`**（已推送 `origin/ca-switch` @ `609f0d9c`）
 > 基线：tag `caswitch-base` / `origin/fork/build` (`bc4c4c45`)，本地领先 11 个提交
 > 工作区：干净
 
@@ -160,44 +160,48 @@ P0–P1 与 P2 的 **2a、2b-1、2e（含 2d）、2b-2** 已全部落地并逐�
 | 5 张已下线表 | v25 未删 | 2f 删 |
 | 前端构建未验证 | 本轮只跑后端 | 2f 补 |
 | 命名不一致 | 分支 `ca-switch` vs 产品名 `caswitch` | P5 前确认 |
-| 远程分支策略 | 分支已本地改名 `ca-switch`、文档提交 `bcf542ce`；推送 `origin/ca-switch` **未完成** | 见下方「推送阻塞记录」 |
+| 远程分支策略 | 已推送 `origin/ca-switch` @ `609f0d9c`（14 个提交）；`origin/fork/build` 未改动 | 见下方「推送记录」 |
 
-### 推送阻塞记录（2026-11-05）
+### 推送记录（2026-11-05，已完成）
 
-本地部分已全部完成：分支 `caswitch` → `ca-switch`、进度文档提交、工作区干净。
-推送到 `origin/ca-switch` 被阻，**根因是凭据无效或授权范围不足，不是代码或网络**：
+**结果**：`origin/ca-switch` 已创建并指向 `609f0d9c`，本地 `origin/ca-switch` 已同步，
+工作区干净、待推送提交数为 0；`origin/fork/build` 全程未改动。共推送 14 个提交
+（P1 → 2b-2 的 11 个 + 3 个文档提交）。
 
-- 系统 GitHub 连接器的 App 用户令牌（`ghu_` 前缀）：git HTTPS 写一律返回
-  `Permission to forlzc/cc-switch.git denied to forlzc`（403）。
-- 第一枚用户提供的 fine-grained PAT（`github_pat_`、93 字符）：REST `Bearer` / `token` / Basic
+排查中踩过的坑，留作凭据配置参考：
+
+- 系统 GitHub 连接器的 App 用户令牌（`ghu_`）：git HTTPS 写返回
+  `Permission to forlzc/cc-switch.git denied to forlzc`（403）；REST 写探测为
+  `Resource not accessible by integration` → 不适用于本仓库 git 写操作。
+- 第一枚 fine-grained PAT（`github_pat_`、93 字符）：REST `Bearer` / `token` / Basic
   均 `401 Bad credentials`，git 端 `Invalid username or token` → **令牌本身无效**。
-- 第二枚 fine-grained PAT：REST `/user` 返回 200（有效），但 git 写仍是 403；
-  用可逆的 REST 写探测（创建 + 立即删除临时 ref，未留下任何远端对象）得到
-  `403 Resource not accessible by personal access token` → **令牌有效，但授权范围不含该仓库的写权限**。
-- 间歇性 `github.com:443` 连接超时（`api.github.com` 始终可用），但多次连接成功并返回明确的
-  401 / 403，足以排除纯网络原因。
+- 第二枚 fine-grained PAT 初次校验：REST `/user` 200（有效），但 git 写 403；
+  可逆的 REST 写探测 `403 Resource not accessible by personal access token`
+  → **令牌有效但授权范围不含该仓库写权限**。用户更新 PAT 权限后，写探测变为
+  `CREATE_REF=201` / `DELETE_REF=204`，git 推送随即成功。
+- 间歇性 `github.com:443` 连接超时（`api.github.com` 始终可用），但多次连接成功并返回
+  明确 401/403，可排除纯网络原因。
 
-> ⚠️ **判据陷阱**：REST `GET /repos/...` 返回的 `permissions.push = true` 反映的是**账号**
+> ⚠️ **判据陷阱**：REST `GET /repos/...` 的 `permissions.push = true` 反映的是**账号**
 > 对该仓库的权限（owner 全为 true），**不是** fine-grained PAT 被授予的范围。
-> 判断 PAT 能否 push，必须看 git 端点或 REST 写操作的返回码。
+> 判断 PAT 能否 push，必须看 git 端点或 REST 写操作（`POST /git/refs`）的返回码。
 
-**解除方式（推荐顺序）**：
+**凭据要求（已验证生效，后续重新生成照此办理）**：
 
 1. **classic PAT（`ghp_`）勾 `repo` scope** —— 最稳，覆盖所有仓库（含 fork），
    不受 fine-grained 的仓库选择限制；
 2. fine-grained PAT：Resource owner `forlzc`、Repository access 选 **All repositories**
    （`cc-switch` 是 fork，常不在「Only select repositories」列表里）、
-   Permissions → **Contents: Read and Write**、确认已生效并完整复制；
-3. 或在 CodeBuddy 设置 → 连接器重新授权 GitHub，并确保授权清单包含 `cc-switch` 与 Contents 写权限。
+   Repository permissions → **Contents: Read and Write**、确认已生效并完整复制；
+3. 连接器路线需确保 GitHub App 授权清单包含 `cc-switch` 与 Contents 写权限，
+   否则得到 `Resource not accessible by integration`。
 
-凭据均用临时环境变量注入，执行 `git push -u origin ca-switch`，不写入仓库配置。
+凭据均用临时环境变量注入（`git push <带凭据 URL> ca-switch:refs/heads/ca-switch`），
+不写入仓库配置、不回显；`branch.ca-switch.merge` 已改指 `refs/heads/ca-switch`，
+避免无参数 `git push` 误推到 `origin/fork/build`。
 
 > 🔒 已明文出现在对话中的两枚 PAT 建议立即在 GitHub 设置里撤销：GitHub 会扫描泄露的
 > 密钥并可能自动令其失效，明文令牌也不宜再次使用。
-
-> ⚠️ 本地 `ca-switch` 原本仍跟踪 `origin/fork/build`（历史遗留），无参数 `git push` 会推到
-> CI 构建分支。已把 `branch.ca-switch.merge` 预先改指 `refs/heads/ca-switch`，避免误推；
-> `origin/fork/build` 全程未改动。若确实需要让 CI 基于新分支构建，请单独确认。
 
 ---
 
