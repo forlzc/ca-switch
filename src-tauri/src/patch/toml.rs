@@ -230,7 +230,7 @@ fn ensure_table_mut<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::live::floor;
+    use crate::floor;
     use toml_edit::value;
 
     fn apply(patch: &TomlPatch, pre: &str) -> String {

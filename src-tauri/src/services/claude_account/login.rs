@@ -591,7 +591,7 @@ mod tests {
     #[test]
     fn unset_list_covers_every_protocol_selector() {
         // 从卡片打开终端时只能按名字清，漏一个选择器 claude 就可能走别的服务
-        for selector in crate::live::floor::CLAUDE_PROTOCOL_SELECTORS {
+        for selector in crate::floor::CLAUDE_PROTOCOL_SELECTORS {
             assert!(
                 CLAUDE_ACCOUNT_UNSET.contains(selector),
                 "{selector} 不在 CLAUDE_ACCOUNT_UNSET 里"

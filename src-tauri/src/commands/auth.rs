@@ -355,14 +355,6 @@ pub async fn auth_poll_for_account(
                 .poll_login(&device_code)
                 .await
                 .map_err(|e| e.to_string())?;
-            if account.is_some() {
-                // 同一账号重新登录会换掉目录：正在用它的官方卡要把新目录写进 live
-                crate::services::provider::claude_official::refresh_live_after_account_change(
-                    app_state.inner(),
-                    &claude_state.0,
-                )
-                .await?;
-            }
             Ok(account.map(map_claude_account))
         }
         _ => unreachable!(),
@@ -575,19 +567,12 @@ pub async fn auth_remove_account(
             .remove(&account_id)
             .await
             .map_err(|e| e.to_string()),
-        // 删目录和钥匙串条目（不吊销、不登出）；正在用它的官方卡退回默认登录
-        AUTH_PROVIDER_CLAUDE_OFFICIAL => {
-            claude_state
-                .0
-                .remove(&account_id)
-                .await
-                .map_err(|e| e.to_string())?;
-            crate::services::provider::claude_official::refresh_live_after_account_change(
-                app_state.inner(),
-                &claude_state.0,
-            )
+        // 删目录和钥匙串条目（不吊销、不登出）
+        AUTH_PROVIDER_CLAUDE_OFFICIAL => claude_state
+            .0
+            .remove(&account_id)
             .await
-        }
+            .map_err(|e| e.to_string()),
         _ => unreachable!(),
     }
 }
@@ -690,18 +675,12 @@ pub async fn auth_logout(
             .await
             .map(|_| ())
             .map_err(|e| e.to_string()),
-        AUTH_PROVIDER_CLAUDE_OFFICIAL => {
-            claude_state
-                .0
-                .remove_all()
-                .await
-                .map_err(|e| e.to_string())?;
-            crate::services::provider::claude_official::refresh_live_after_account_change(
-                app_state.inner(),
-                &claude_state.0,
-            )
+        AUTH_PROVIDER_CLAUDE_OFFICIAL => claude_state
+            .0
+            .remove_all()
             .await
-        }
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
         _ => unreachable!(),
     }
 }

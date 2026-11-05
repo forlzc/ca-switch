@@ -302,7 +302,7 @@ fn ensure_object_mut<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::live::floor;
+    use crate::floor;
     use serde_json::json;
 
     fn apply(patch: &JsonPatch, pre: &str) -> String {

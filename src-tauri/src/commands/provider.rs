@@ -55,16 +55,14 @@ pub async fn add_provider(
     app_handle: tauri::AppHandle,
     app: String,
     provider: Provider,
-    #[allow(non_snake_case)] addToLive: Option<bool>,
     #[allow(non_snake_case)] editorSave: Option<EditorSave>,
 ) -> Result<bool, String> {
     let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    let add_to_live = addToLive.unwrap_or(true);
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle
             .try_state::<AppState>()
             .ok_or_else(|| "应用状态不可用".to_string())?;
-        ProviderService::add_from_editor(state.inner(), app_type, provider, add_to_live, editorSave)
+        ProviderService::add_from_editor(state.inner(), app_type, provider, editorSave)
             .map_err(|e| e.to_string())
     })
     .await
@@ -152,40 +150,6 @@ pub async fn delete_provider(
     .map_err(|e| format!("供应商删除任务失败: {e}"))?
 }
 
-#[tauri::command]
-pub async fn add_provider_to_live_config(
-    state: tauri::State<'_, AppState>,
-    app: String,
-    id: String,
-) -> Result<bool, String> {
-    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        ProviderService::add_to_live_config(&state, app_type, &id)
-            .map(|_| true)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| format!("供应商添加到应用任务失败: {e}"))?
-}
-
-#[tauri::command]
-pub async fn remove_provider_from_live_config(
-    state: tauri::State<'_, AppState>,
-    app: String,
-    id: String,
-) -> Result<bool, String> {
-    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        ProviderService::remove_from_live_config(&state, app_type, &id)
-            .map(|_| true)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| format!("供应商从应用移除任务失败: {e}"))?
-}
-
 fn switch_provider_internal(
     state: &AppState,
     app_type: AppType,
@@ -220,88 +184,6 @@ pub async fn switch_provider(
     .await
     .map_err(|e| format!("供应商切换任务执行失败: {e}"))??;
     Ok(result)
-}
-
-fn import_default_config_internal(state: &AppState, app_type: AppType) -> Result<bool, AppError> {
-    if matches!(app_type, AppType::GrokBuild) {
-        // 官方登录态（live 语法合法且无自定义模型表）+ 用户手动导入：
-        // 导入的正确结果是让 Grok Official 成为当前供应商，而非报错。
-        // 只挂在命令层 = 只有手动动作可达；启动自动导入走 service 层、
-        // 官方态照旧报错静默跳过，删掉的官方条目不会被重启复活
-        //（全项目惯例：启动自动导入只产出 default，从不产出官方条目）。
-        if let Ok(settings) = crate::grok_config::read_grok_live_settings() {
-            let config = settings
-                .get("config")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-            if crate::grok_config::is_official_live_config(config) {
-                state.db.ensure_official_seed_by_id(
-                    crate::database::GROKBUILD_OFFICIAL_PROVIDER_ID,
-                    AppType::GrokBuild,
-                )?;
-                state.db.set_current_provider(
-                    app_type.as_str(),
-                    crate::database::GROKBUILD_OFFICIAL_PROVIDER_ID,
-                )?;
-                crate::settings::set_current_provider(
-                    &app_type,
-                    Some(crate::database::GROKBUILD_OFFICIAL_PROVIDER_ID),
-                )?;
-                return Ok(true);
-            }
-        }
-
-        // Safety net: 与 claude-desktop 导入同语义 —— 用户主动点导入是"重新
-        // 整理该表"的隐式信号，把官方入口补回来。覆盖导入必然失败的场景
-        //（live 文件缺失 / TOML 语法错误 / 残缺的自定义配置），避免
-        // "报错 + 空列表"死胡同。失败只 warn，不影响导入主流程。
-        if let Err(e) = state.db.ensure_official_seed_by_id(
-            crate::database::GROKBUILD_OFFICIAL_PROVIDER_ID,
-            AppType::GrokBuild,
-        ) {
-            log::warn!("Failed to ensure grokbuild-official seed during import: {e}");
-        }
-    }
-
-    let imported = ProviderService::import_default_config(state, app_type.clone())?;
-
-    if imported {
-        // Extract common config snippet (mirrors old startup logic in lib.rs)
-        if state
-            .db
-            .should_auto_extract_config_snippet(app_type.as_str())?
-        {
-            match ProviderService::extract_common_config_snippet(state, app_type.clone()) {
-                Ok(snippet) if !snippet.is_empty() && snippet != "{}" => {
-                    let _ = state
-                        .db
-                        .set_config_snippet(app_type.as_str(), Some(snippet));
-                    let _ = state
-                        .db
-                        .set_config_snippet_cleared(app_type.as_str(), false);
-                }
-                _ => {}
-            }
-        }
-
-        ProviderService::migrate_legacy_common_config_usage_if_needed(state, app_type.clone())?;
-    }
-
-    Ok(imported)
-}
-
-#[cfg_attr(not(feature = "test-hooks"), doc(hidden))]
-pub fn import_default_config_test_hook(
-    state: &AppState,
-    app_type: AppType,
-) -> Result<bool, AppError> {
-    import_default_config_internal(state, app_type)
-}
-
-#[tauri::command]
-pub fn import_default_config(state: State<'_, AppState>, app: String) -> Result<bool, String> {
-    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    import_default_config_internal(&state, app_type).map_err(Into::into)
 }
 
 #[tauri::command]
@@ -897,12 +779,6 @@ pub async fn testUsageScript(
 }
 
 #[tauri::command]
-pub fn read_live_provider_settings(app: String) -> Result<serde_json::Value, String> {
-    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    ProviderService::read_live_settings(app_type).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
 pub async fn test_api_endpoints(
     urls: Vec<String>,
     #[allow(non_snake_case)] timeoutSecs: Option<u64>,
@@ -976,11 +852,7 @@ pub async fn update_providers_sort_order(
     let _serial = SORT_ORDER_LOCK.lock().await;
     let changed = ProviderService::update_sort_order(state.inner(), app_type.clone(), updates)
         .map_err(|e| e.to_string())?;
-    let synced = crate::mode::controller::sync_stack_order(state.inner(), &app_type).await;
     crate::tray::refresh_tray_menu(&app_handle);
-    synced.map_err(|error| {
-        format!("排序已保存，但聚合模型顺序没能更新: {error} (Sort order saved, but the aggregated model order could not be updated)")
-    })?;
     Ok(changed)
 }
 
@@ -1060,12 +932,6 @@ pub fn sync_universal_provider(
     emit_universal_provider_synced(&app, "sync", &id);
 
     Ok(result)
-}
-
-#[tauri::command]
-pub fn import_opencode_providers_from_live(state: State<'_, AppState>) -> Result<usize, String> {
-    crate::services::provider::import_opencode_providers_from_live(state.inner())
-        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

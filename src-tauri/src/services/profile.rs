@@ -171,12 +171,8 @@ impl ProfileService {
 
         for app in scope.apps().iter() {
             if let Some(slot) = payload.providers.get_mut(app) {
-                // 和应用快照时一致：代理模式下记的是代理路由到的那家。
-                *slot = crate::mode::current::provider_for(
-                    &state.db,
-                    app,
-                    crate::mode::current::Purpose::InUse,
-                )?;
+                *slot = ProviderService::active_provider(&state.db, app)?
+                    .map(|provider| provider.id);
             }
             if let Some(slot) = payload.prompts.get_mut(app) {
                 *slot = Some(
@@ -325,11 +321,8 @@ impl ProfileService {
                         "[{app_str}] provider '{target_pid}' no longer exists, skipped"
                     ));
                 } else {
-                    let current = crate::mode::current::provider_for(
-                        &state.db,
-                        app,
-                        crate::mode::current::Purpose::InUse,
-                    )?;
+                    let current = ProviderService::active_provider(&state.db, app)?
+                        .map(|provider| provider.id);
                     if current.as_deref() != Some(target_pid.as_str()) {
                         match ProviderService::switch(state, app.clone(), target_pid) {
                             Ok(result) => warnings.extend(result.warnings),

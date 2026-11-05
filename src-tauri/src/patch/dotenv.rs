@@ -163,7 +163,7 @@ fn unquote(value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::live::floor;
+    use crate::floor;
 
     fn apply(patch: &DotenvPatch, pre: Option<&str>) -> String {
         let out = patch

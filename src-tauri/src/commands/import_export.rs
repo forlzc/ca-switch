@@ -11,7 +11,6 @@ use crate::commands::sync_support::{
 use crate::database::backup::BackupEntry;
 use crate::database::Database;
 use crate::error::AppError;
-use crate::services::provider::ProviderService;
 use crate::services::sync_protocol::sync_mutex;
 use crate::store::AppState;
 
@@ -76,21 +75,6 @@ pub async fn import_config_from_file(
     .map_err(|e: AppError| e.to_string())
 }
 
-#[tauri::command]
-pub async fn sync_current_providers_live(state: State<'_, AppState>) -> Result<Value, String> {
-    let db = state.db.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let app_state = AppState::new(db);
-        ProviderService::sync_current_to_live(&app_state)?;
-        Ok::<_, AppError>(json!({
-            "success": true,
-            "message": "Live configuration synchronized"
-        }))
-    })
-    .await
-    .map_err(|e| format!("同步当前供应商失败: {e}"))?
-    .map_err(|e: AppError| e.to_string())
-}
 
 // ─── File dialogs ────────────────────────────────────────────
 

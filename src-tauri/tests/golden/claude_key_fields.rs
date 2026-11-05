@@ -4,13 +4,13 @@
 //! 切换后 live 里的关键字段必须恰好等于目标供应商行里的，上一家的一个都不能留。
 //! 旧代码靠整份覆盖做到这一点，重构版改成「清空关键字段再写入」，结果必须一样。
 //!
-//! 关键字段的定义直接引用 `live::floor`，和切换用的是同一份。
+//! 关键字段的定义直接引用 `floor`，和切换用的是同一份。
 
 use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
-use cc_switch_lib::live::floor::{claude_floor_env, claude_floor_top};
+use cc_switch_lib::floor::{claude_floor_env, claude_floor_top};
 use cc_switch_lib::{AppState, AppType, Provider, ProviderService};
 
 use crate::support::{create_test_state, reset_test_fs, test_mutex};

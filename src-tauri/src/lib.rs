@@ -25,9 +25,7 @@ mod kimi_session;
 mod lightweight;
 #[cfg(target_os = "linux")]
 mod linux_fix;
-pub mod live;
 mod mcode_config;
-pub mod mode;
 mod model_capabilities;
 mod omp_config;
 mod openclaw_config;
@@ -36,6 +34,9 @@ mod panic_hook;
 mod pi_config;
 mod prompt;
 mod prompt_files;
+pub mod floor;
+pub mod model_label;
+pub mod patch;
 pub mod protocol;
 mod provider;
 mod proxy;
@@ -68,7 +69,7 @@ pub use protocol::{AuthStyle, Conversion, Matrix, Protocol, ProtocolSource, Tran
 pub use provider::{Provider, ProviderMeta};
 pub use services::{
     profile::{ProfilePayload, ProfileScope, ProfileService, NO_ACTIVE_PROMPT},
-    provider::{reapply_current_codex_official_live, EditorSave, EditorView},
+    provider::{EditorSave, EditorView},
     ConfigService, EndpointLatency, PromptService, ProviderService, ProxyService, SpeedtestService,
 };
 pub use settings::{update_settings, AppSettings};
@@ -779,66 +780,20 @@ pub fn run() {
             // 设置 AppHandle 用于代理故障转移时的 UI 更新
             app_state.proxy_service.set_app_handle(app.handle().clone());
 
-            // 补完上次崩溃时写到一半的客户端文件（写前意图在 ~/.cc-switch/live-state.json），
-            // 要在任何写客户端文件的启动步骤之前。
-            crate::mode::operation::recover_on_startup(&app_state.db);
 
             // ============================================================
             // 按表独立判断的导入逻辑（各类数据独立检查，互不影响）
             // ============================================================
 
-            // 1.5. 自动导入 live 配置 + seed 官方预设供应商（Claude / Codex / Gemini）
+            // 1.5. seed 官方预设供应商（Claude / Codex / Gemini）
             //
-            // 先 import 后 seed 是有意为之：先把用户手动配置的 settings.json / auth.json / .env
-            // 落成 "default" provider 设为 current，再追加官方预设（is_current=false）。
-            // 降级回旧版时，旧版的回填和整份写入仍靠这一行保住用户原来的 live 配置。
-            //
-            // 捕获首次运行快照：所有全新装用户都会看到欢迎弹窗介绍 CC Switch 的工作方式。
+            // 捕获首次运行快照：所有全新装用户都会看到欢迎弹窗介绍本应用的工作方式。
             // 读失败时默认不弹，宁可漏弹也不要因为故障打扰用户。
             let first_run_already_confirmed = crate::settings::get_settings()
                 .first_run_notice_confirmed
                 .unwrap_or(false);
             let fresh_install_at_startup =
                 app_state.db.is_providers_empty().unwrap_or(false);
-
-            for app_type in
-                crate::app_config::AppType::all().filter(|t| !t.is_additive_mode())
-            {
-                if !crate::services::provider::should_import_default_config_on_startup(
-                    &app_state,
-                    &app_type,
-                )
-                .unwrap_or(false)
-                {
-                    log::debug!(
-                        "○ {} already has providers; live import skipped",
-                        app_type.as_str()
-                    );
-                    continue;
-                }
-
-                match crate::services::provider::import_default_config(
-                    &app_state,
-                    app_type.clone(),
-                ) {
-                    Ok(true) => log::info!(
-                        "✓ Imported live config for {} as default provider",
-                        app_type.as_str()
-                    ),
-                    Ok(false) => log::debug!(
-                        "○ {} already has providers; live import skipped",
-                        app_type.as_str()
-                    ),
-                    Err(e) => log::debug!(
-                        "○ No live config to import for {}: {e}",
-                        app_type.as_str()
-                    ),
-                }
-            }
-
-            if let Err(error) = crate::services::provider::initialize_dsh_profiles(&app_state) {
-                log::warn!("Initializing DeepSeek Harness profiles failed: {error}");
-            }
 
             match app_state.db.init_default_official_providers() {
                 Ok(count) if count > 0 => {
@@ -933,52 +888,6 @@ pub fn run() {
             // 字段只由前端在用户点击"我知道了"时 save_settings 回写，语义是"用户显式确认过"。
             if !first_run_already_confirmed && fresh_install_at_startup {
                 log::info!("✓ First-run welcome notice pending");
-            }
-
-            // 1.6. 自动同步累加模式应用的原生 providers 到数据库
-            //
-            // additive 模式的 import 函数按 id 幂等——
-            // 新 id 执行导入，已有 id 则更新 settings 和 display name，所以每次
-            // 启动都跑是安全的：既保证新装用户开箱可见 live 中的供应商，也让外部
-            // 修改的 live 文件能在重启后同步到数据库（与之前依赖前端"导入当前配置"
-            // 按钮手动触发不同）。
-            //
-            // 底层 read_*_config 在文件不存在时返回默认空配置，因此新装且无
-            // live 文件的用户走 Ok(0) 路径，不会产生错误日志噪音。
-            match crate::services::provider::import_opencode_providers_from_live(&app_state) {
-                Ok(count) if count > 0 => {
-                    log::info!("✓ Synced {count} OpenCode provider(s) from live config");
-                }
-                Ok(_) => log::debug!("○ No OpenCode provider changes from live config"),
-                Err(e) => log::warn!("✗ Failed to import OpenCode providers: {e}"),
-            }
-            match crate::services::provider::import_openclaw_providers_from_live(&app_state) {
-                Ok(count) if count > 0 => {
-                    log::info!("✓ Synced {count} OpenClaw provider(s) from live config");
-                }
-                Ok(_) => log::debug!("○ No OpenClaw provider changes from live config"),
-                Err(e) => log::warn!("✗ Failed to import OpenClaw providers: {e}"),
-            }
-            match crate::services::provider::import_hermes_providers_from_live(&app_state) {
-                Ok(count) if count > 0 => {
-                    log::info!("✓ Synced {count} Hermes provider(s) from live config");
-                }
-                Ok(_) => log::debug!("○ No Hermes provider changes from live config"),
-                Err(e) => log::warn!("✗ Failed to import Hermes providers: {e}"),
-            }
-            match crate::services::provider::import_pi_providers_from_live(&app_state) {
-                Ok(count) if count > 0 => {
-                    log::info!("✓ Synced {count} Pi provider(s) from native config");
-                }
-                Ok(_) => log::debug!("○ No Pi provider changes from native config"),
-                Err(e) => log::warn!("✗ Failed to import Pi providers: {e}"),
-            }
-            match crate::services::provider::import_omp_providers_from_live(&app_state) {
-                Ok(count) if count > 0 => {
-                    log::info!("✓ Synced {count} Oh My Pi provider(s) from native config");
-                }
-                Ok(_) => log::debug!("○ No Oh My Pi provider changes from native config"),
-                Err(e) => log::warn!("✗ Failed to import Oh My Pi providers: {e}"),
             }
 
             // 2. OMO 配置导入（当数据库中无 OMO provider 时，从本地文件导入）
@@ -1241,11 +1150,8 @@ pub fn run() {
                 let data_dir = crate::config::get_app_config_dir();
                 let manager = ClaudeAccountManager::new(data_dir.clone());
                 app.manage(commands::ClaudeAccountState(Arc::new(manager)));
-                let db = app.state::<AppState>().db.clone();
                 std::thread::spawn(move || {
-                    // 上次切换登录时崩溃、断电：先补完（配置操作在前面已补完，指针已落定）
-                    crate::services::provider::claude_official::recover_login_switch(&db);
-                    // 默认目录的设置、MCP 可能在 CC Switch 没运行时改过
+                    // 默认目录的设置可能在应用没运行时改过
                     crate::services::claude_account::sync_all_shared(&data_dir)
                 });
             }
@@ -1288,32 +1194,9 @@ pub fn run() {
 
                 // 必须排在 auto-extract 之前：先把历史泄漏进 Gemini 共享片段的凭据
                 // 清干净，否则紧接着的提取会基于被污染的 live 再写一遍。
-                if let Err(e) =
-                    crate::services::provider::ProviderService::scrub_leaked_gemini_common_config(
-                        &state,
-                    )
-                    .await
-                {
-                    log::warn!("清理 Gemini 通用配置泄漏凭据失败: {e}");
-                }
 
-                initialize_common_config_snippets(&state);
-
-                // 定下各应用的直连 / 代理模式（处理旧版遗留的接管状态），再把代理模式的
-                // 应用接上。要排在通用配置片段的自动提取之后：它读的是直连的 live。
-                crate::mode::controller::startup(&state).await;
-                // #8268 测试版给 agy 装过包装脚本、改过 shell 启动文件，撤掉带标记的部分。
-                if let Err(e) =
-                    crate::services::provider::agy_direct::migrate_legacy_launcher(&state.db)
-                {
-                    log::warn!("清理旧版 agy 启动器失败: {e}");
-                }
-                // 启动流程走完：托盘这时才开始报「路由服务没在运行」，并记下退回直连的应用。
+                // 启动流程走完：托盘这时才开始报「路由服务没在运行」。
                 crate::tray::mark_startup_settled(&app_handle);
-                // Codex 官方做路由、发布了 Stack 模型时，官方模型列表过期就在后台刷新。
-                crate::services::provider::codex_official_models::start_background_checks(
-                    state.inner().clone(),
-                );
 
                 // Periodic backup check (on startup)
                 if let Err(e) = state.db.periodic_backup_if_needed() {
@@ -1462,10 +1345,7 @@ pub fn run() {
             commands::update_provider,
             commands::get_provider_editor_view,
             commands::delete_provider,
-            commands::add_provider_to_live_config,
-            commands::remove_provider_from_live_config,
             commands::switch_provider,
-            commands::import_default_config,
             commands::get_claude_desktop_status,
             commands::get_claude_desktop_default_routes,
             commands::import_claude_desktop_providers_from_claude,
@@ -1488,14 +1368,11 @@ pub fn run() {
             commands::set_claude_common_config_snippet,
             commands::get_common_config_snippet,
             commands::set_common_config_snippet,
-            commands::extract_common_config_snippet,
-            commands::read_live_provider_settings,
             commands::get_settings,
             commands::save_settings,
             commands::has_codex_unify_history_backup,
             commands::codex_forces_multi_agent_v2,
             commands::get_codex_session_compression,
-            commands::set_codex_session_compression,
             commands::get_codex_sessions_disk_usage,
             commands::restore_codex_unified_history,
             commands::get_rectifier_config,
@@ -1601,7 +1478,6 @@ pub fn run() {
             commands::restore_db_backup,
             commands::rename_db_backup,
             commands::delete_db_backup,
-            commands::sync_current_providers_live,
             // Deep link import
             commands::parse_deeplink,
             commands::merge_deeplink_config,
@@ -1623,12 +1499,6 @@ pub fn run() {
             // Proxy server management
             commands::start_proxy_server,
             commands::stop_proxy_server,
-            commands::stop_proxy_with_restore,
-            commands::get_proxy_takeover_status,
-            commands::set_proxy_takeover_for_app,
-            commands::get_app_mode,
-            commands::set_proxy_route,
-            commands::take_startup_attach_failures,
             tray::take_tray_navigation,
             tray_panel::tray_panel_state,
             tray_panel::tray_panel_placement,
@@ -1636,8 +1506,6 @@ pub fn run() {
             tray_panel::tray_panel_hide,
             tray_panel::tray_panel_action,
             tray::tray_app_page_seen,
-            commands::exit_proxy_apps_in_mode,
-            commands::get_direct_provider,
             commands::get_proxy_status,
             commands::get_proxy_config,
             commands::update_proxy_config,
@@ -1651,13 +1519,6 @@ pub fn run() {
             commands::get_pricing_model_source,
             commands::set_pricing_model_source,
             commands::is_proxy_running,
-            commands::is_live_takeover_active,
-            commands::switch_proxy_provider,
-            commands::get_proxy_stack,
-            commands::set_proxy_stack_member,
-            commands::adopt_codex_stack_catalog,
-            commands::restart_codex_app_server_daemon,
-            commands::acknowledge_codex_stale_clients,
             // Proxy failover commands
             commands::get_provider_health,
             commands::reset_circuit_breaker,
@@ -1728,12 +1589,10 @@ pub fn run() {
             commands::rename_custom_icon,
             commands::delete_custom_icon,
             // OpenCode specific
-            commands::import_opencode_providers_from_live,
             commands::get_opencode_live_provider_ids,
             commands::get_opencode_default_model,
             commands::set_opencode_default_model,
             // OpenClaw specific
-            commands::import_openclaw_providers_from_live,
             commands::get_openclaw_live_provider_ids,
             commands::get_openclaw_live_provider,
             commands::scan_openclaw_config_health,
@@ -1748,7 +1607,6 @@ pub fn run() {
             commands::get_openclaw_tools,
             commands::set_openclaw_tools,
             // Hermes specific
-            commands::import_hermes_providers_from_live,
             commands::get_hermes_live_provider_ids,
             commands::get_hermes_live_provider,
             commands::get_hermes_model_config,
@@ -1944,12 +1802,13 @@ pub fn run() {
 
 /// 应用退出前的清理工作
 ///
-/// 把接上代理的客户端都指回直连（模式和代理路由保留，下次启动再接上），再停止代理。
-/// 客户端不能一直指着代理：开机自启默认关闭，CC Switch 一关客户端就连不上了。
+/// caswitch 不碰客户端文件，退出时没有要「指回直连」的东西，只把本地代理服务停掉。
 pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
     if let Some(state) = app_handle.try_state::<store::AppState>() {
-        crate::mode::controller::detach_all(state.inner()).await;
-        log::info!("退出清理完成：客户端已指回直连，代理已停止");
+        if state.proxy_service.running_now() == Some(true) {
+            let _ = state.proxy_service.stop().await;
+        }
+        log::info!("退出清理完成：代理已停止");
     }
 }
 
@@ -1993,89 +1852,6 @@ pub(crate) fn remove_tray_icon_before_exit(app_handle: &tauri::AppHandle) {
             log::warn!("退出时移除托盘图标失败: {e}");
         } else {
             log::info!("已显式从系统托盘移除图标");
-        }
-    }
-}
-
-fn initialize_common_config_snippets(state: &store::AppState) {
-    // Auto-extract common config snippets from clean live files when snippet is missing.
-    // This must run before proxy mode is re-attached on startup, otherwise we'd read
-    // proxy-placeholder configs instead of the user's actual live settings. A client
-    // still attached from an update restart (no detach on the way out) is skipped too.
-    for app_type in crate::app_config::AppType::all() {
-        if !state
-            .db
-            .should_auto_extract_config_snippet(app_type.as_str())
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        if state.proxy_service.live_has_proxy_placeholder(&app_type) {
-            continue;
-        }
-
-        let settings = match crate::services::provider::ProviderService::read_live_settings(
-            app_type.clone(),
-        ) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-
-        match crate::services::provider::ProviderService::extract_common_config_snippet_from_settings(
-            app_type.clone(),
-            &settings,
-        ) {
-            Ok(snippet) if !snippet.is_empty() && snippet != "{}" => {
-                match state.db.set_config_snippet(app_type.as_str(), Some(snippet)) {
-                    Ok(()) => {
-                        let _ = state.db.set_config_snippet_cleared(app_type.as_str(), false);
-                        log::info!(
-                            "✓ Auto-extracted common config snippet for {}",
-                            app_type.as_str()
-                        );
-                    }
-                    Err(e) => log::warn!(
-                        "✗ Failed to save config snippet for {}: {e}",
-                        app_type.as_str()
-                    ),
-                }
-            }
-            Ok(_) => log::debug!(
-                "○ Live config for {} has no extractable common fields",
-                app_type.as_str()
-            ),
-            Err(e) => log::warn!(
-                "✗ Failed to extract config snippet for {}: {e}",
-                app_type.as_str()
-            ),
-        }
-    }
-
-    let should_run_legacy_migration = state
-        .db
-        .is_legacy_common_config_migrated()
-        .map(|done| !done)
-        .unwrap_or(true);
-
-    if should_run_legacy_migration {
-        for app_type in [
-            crate::app_config::AppType::Claude,
-            crate::app_config::AppType::Codex,
-            crate::app_config::AppType::Gemini,
-        ] {
-            if let Err(e) = crate::services::provider::ProviderService::migrate_legacy_common_config_usage_if_needed(
-                state,
-                app_type.clone(),
-            ) {
-                log::warn!(
-                    "✗ Failed to migrate legacy common-config usage for {}: {e}",
-                    app_type.as_str()
-                );
-            }
-        }
-
-        if let Err(e) = state.db.set_legacy_common_config_migrated(true) {
-            log::warn!("✗ Failed to persist legacy common-config migration flag: {e}");
         }
     }
 }

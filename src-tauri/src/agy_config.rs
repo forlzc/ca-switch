@@ -24,8 +24,8 @@ use serde_json::{json, Value};
 
 use crate::config::{atomic_write_private, get_app_config_dir, get_home_dir, write_text_file};
 use crate::error::AppError;
-use crate::live::patch::json::JsonPatch;
-use crate::live::patch::{KeyPath, LivePatch};
+use crate::patch::json::JsonPatch;
+use crate::patch::{KeyPath, LivePatch};
 
 /// `~/.gemini/antigravity-cli`
 pub fn agy_dir() -> PathBuf {
@@ -157,34 +157,6 @@ fn key_profile_patch(projection: &AgyProjection) -> JsonPatch {
         None => patch.remove.push(model),
     }
     patch
-}
-
-/// 撤掉 #8268 测试版写进真实 `settings.json` 的 `modelProvider`，模型和其余键不动。
-/// 这是 CC Switch 对真实 `settings.json` 唯一的写入。
-pub(crate) fn release_model_provider(
-    db: &crate::database::Database,
-) -> Result<crate::mode::operation::OperationReport, AppError> {
-    use crate::live::engine::LiveFile;
-    use crate::mode::operation::{AppWrite, FileChange};
-    use crate::mode::state::{op, PendingTarget};
-    let write = AppWrite::begin(db, "agy")?;
-    let path = settings_path();
-    if !path.exists() {
-        return write.run(op::APPLY, &[], PendingTarget::default());
-    }
-    let pre = fs::read(&path).map_err(|e| AppError::io(&path, e))?;
-    let mut patch = JsonPatch::default();
-    patch.remove.push(KeyPath::new(&["modelProvider"]));
-    // 先验证：文件坏了就停。
-    patch.apply(&path, Some(&pre)).map_err(AppError::from)?;
-    write.run(
-        op::APPLY,
-        &[FileChange {
-            file: LiveFile::private(path),
-            patch: &patch,
-        }],
-        PendingTarget::default(),
-    )
 }
 
 /// 在终端里启动这张卡要用的参数。
@@ -596,7 +568,6 @@ mod integration_tests {
     use super::*;
     use crate::app_config::AppType;
     use crate::database::Database;
-    use crate::mode::operation::failpoint;
     use crate::provider::Provider;
     use crate::services::provider::agy_direct;
     use crate::store::AppState;
@@ -619,7 +590,6 @@ mod integration_tests {
     }
     impl Drop for HomeGuard {
         fn drop(&mut self) {
-            failpoint::crash_at(None);
             match self.1.take() {
                 Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
                 None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
@@ -779,50 +749,6 @@ mod integration_tests {
         assert!(!settings_path().exists());
     }
 
-    #[test]
-    #[serial]
-    fn existing_empty_agy_settings_are_not_imported() {
-        let _home = HomeGuard::new();
-        fs::create_dir_all(agy_dir()).unwrap();
-        fs::write(settings_path(), r#"{"theme":"dark"}"#).unwrap();
-        let db = Arc::new(Database::memory().unwrap());
-        let state = AppState::new(db.clone());
-        assert!(
-            !crate::services::ProviderService::import_default_config(&state, AppType::Agy).unwrap()
-        );
-        assert!(db.get_all_providers("agy").unwrap().is_empty());
-
-        // A stored provider is not applied by a full sync either.
-        let blank = provider("blank", json!({"env":{},"config":{}}), false);
-        db.save_provider("agy", &blank).unwrap();
-        db.set_current_provider("agy", "blank").unwrap();
-        let result = crate::services::ProviderService::sync_current_to_live(&state);
-        if let Err(error) = &result {
-            assert!(!error.to_string().contains("provider/agy"), "{error}");
-        }
-        assert_eq!(
-            fs::read_to_string(settings_path()).unwrap(),
-            r#"{"theme":"dark"}"#
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn settings_with_a_model_are_still_imported() {
-        let _home = HomeGuard::new();
-        fs::create_dir_all(agy_dir()).unwrap();
-        fs::write(settings_path(), r#"{"model":"Gemini 3.8 Flash (High)"}"#).unwrap();
-        let db = Arc::new(Database::memory().unwrap());
-        let state = AppState::new(db.clone());
-        assert!(
-            crate::services::ProviderService::import_default_config(&state, AppType::Agy).unwrap()
-        );
-        // The key never lives in a file, so anything imported is agy's own login.
-        let imported = db.get_provider_by_id("default", "agy").unwrap().unwrap();
-        assert_eq!(imported.category.as_deref(), Some("official"));
-        assert!(agy_direct::is_official(&imported));
-    }
-
     /// 造一份 #8268 测试版留下的现场。
     fn legacy_install(home: &Path) -> PathBuf {
         let bin = agy_dir().join("bin");
@@ -894,30 +820,6 @@ mod integration_tests {
             fs::read_to_string(home.path().join(".zshenv")).unwrap(),
             foreign
         );
-    }
-
-    #[test]
-    #[serial]
-    fn legacy_migration_rewrites_settings_back_to_login_mode() {
-        let home = HomeGuard::new();
-        legacy_install(home.path());
-        fs::write(
-            settings_path(),
-            r#"{"modelProvider":"gemini","model":"Gemini 3.1 Pro (High)"}"#,
-        )
-        .unwrap();
-        let db = Database::memory().unwrap();
-        agy_direct::migrate_legacy_launcher(&db).unwrap();
-        let doc = read_json(&settings_path());
-        assert!(doc.get("modelProvider").is_none());
-        assert_eq!(doc["model"], "Gemini 3.1 Pro (High)");
-        assert!(!agy_dir().join("env").exists());
-
-        // Without a legacy install nothing is touched, not even a stray modelProvider.
-        let untouched = r#"{"modelProvider":"gemini"}"#;
-        fs::write(settings_path(), untouched).unwrap();
-        agy_direct::migrate_legacy_launcher(&db).unwrap();
-        assert_eq!(fs::read_to_string(settings_path()).unwrap(), untouched);
     }
 
     fn fake_agy(dir: &Path) -> PathBuf {

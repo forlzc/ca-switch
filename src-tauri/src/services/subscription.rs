@@ -678,7 +678,7 @@ fn codex_keychain_account(codex_home: &std::path::Path) -> String {
     let canonical = codex_home
         .canonicalize()
         .unwrap_or_else(|_| codex_home.to_path_buf());
-    let hex = crate::live::engine::sha256_hex(canonical.to_string_lossy().as_bytes());
+    let hex = crate::patch::sha256_hex(canonical.to_string_lossy().as_bytes());
     format!("cli|{}", &hex[..16])
 }
 

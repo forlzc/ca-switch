@@ -449,25 +449,3 @@ mod tests {
     }
 }
 
-#[tauri::command]
-pub async fn extract_common_config_snippet(
-    appType: String,
-    settingsConfig: Option<String>,
-    state: tauri::State<'_, crate::store::AppState>,
-) -> Result<String, String> {
-    let app = AppType::from_str(&appType).map_err(|e| e.to_string())?;
-
-    if let Some(settings_config) = settingsConfig.filter(|s| !s.trim().is_empty()) {
-        let settings: serde_json::Value =
-            serde_json::from_str(&settings_config).map_err(invalid_json_format_error)?;
-
-        return crate::services::provider::ProviderService::extract_common_config_snippet_from_settings(
-            app,
-            &settings,
-        )
-        .map_err(|e| e.to_string());
-    }
-
-    crate::services::provider::ProviderService::extract_common_config_snippet(&state, app)
-        .map_err(|e| e.to_string())
-}

@@ -1,22 +1,11 @@
 use std::collections::HashMap;
-use tauri::State;
 
 use crate::openclaw_config;
-use crate::store::AppState;
 
 // ============================================================================
 // OpenClaw Provider Commands (migrated from provider.rs)
 // ============================================================================
 
-/// Import providers from OpenClaw live config to database.
-///
-/// OpenClaw uses additive mode — users may already have providers
-/// configured in openclaw.json.
-#[tauri::command]
-pub fn import_openclaw_providers_from_live(state: State<'_, AppState>) -> Result<usize, String> {
-    crate::services::provider::import_openclaw_providers_from_live(state.inner())
-        .map_err(|e| e.to_string())
-}
 
 /// Get provider IDs in the OpenClaw live config.
 #[tauri::command]

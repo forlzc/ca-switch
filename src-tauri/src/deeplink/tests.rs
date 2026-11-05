@@ -1094,70 +1094,6 @@ fn row_config(settings: &serde_json::Value) -> toml_edit::DocumentMut {
         .expect("row config parses")
 }
 
-/// 行投影成切换时写进 live 的路由表。
-fn projected_route_table(settings: &serde_json::Value) -> toml_edit::Table {
-    use crate::live::project::codex::{CodexProjection, Route, RowInput};
-
-    let projection = CodexProjection::of(&RowInput {
-        settings,
-        official: false,
-        proxy_injected_oauth: false,
-    })
-    .expect("row projects");
-    match projection.route {
-        Route::Custom { table, .. } => table,
-        other => panic!("expected a custom route, got {other:?}"),
-    }
-}
-
-#[test]
-fn test_codex_link_config_keeps_provider_auth_fields_through_to_live() {
-    // #7438：链接里的鉴权方式和必需的头要原样落到行里，切换时写进 live
-    let config = serde_json::json!({
-        "auth": { "OPENAI_API_KEY": "sk-link" },
-        "config": concat!(
-            "model_provider = \"custom\"\n",
-            "model = \"gpt-5.5\"\n",
-            "model_reasoning_effort = \"medium\"\n\n",
-            "[model_providers.custom]\n",
-            "name = \"Relay Auth\"\n",
-            "base_url = \"https://api.relay.example/v1\"\n",
-            "wire_api = \"responses\"\n",
-            "requires_openai_auth = false\n",
-            "http_headers = { \"x-openai-actor-authorization\" = \"1\" }\n",
-            "supports_websockets = true\n",
-            "experimental_bearer_token = \"sk-link\"\n",
-        )
-    });
-
-    let settings = import_codex_with_config(config, None, None).unwrap();
-    assert_eq!(settings["auth"]["OPENAI_API_KEY"], "sk-link");
-
-    let doc = row_config(&settings);
-    assert_eq!(doc["model"].as_str(), Some("gpt-5.5"));
-    assert_eq!(doc["model_reasoning_effort"].as_str(), Some("medium"));
-    let table = &doc["model_providers"]["custom"];
-    assert_eq!(table["name"].as_str(), Some("Relay Auth"));
-    assert_eq!(table["requires_openai_auth"].as_bool(), Some(false));
-    assert_eq!(table["supports_websockets"].as_bool(), Some(true));
-    assert_eq!(
-        table["http_headers"]["x-openai-actor-authorization"].as_str(),
-        Some("1")
-    );
-    assert_eq!(table["experimental_bearer_token"].as_str(), Some("sk-link"));
-
-    let live = projected_route_table(&settings);
-    assert_eq!(
-        live["experimental_bearer_token"].as_str(),
-        Some("sk-link"),
-        "切换时 Key 写成路由表的 bearer token"
-    );
-    assert_eq!(live["supports_websockets"].as_bool(), Some(true));
-    assert!(live["http_headers"]
-        .as_table_like()
-        .is_some_and(|headers| headers.contains_key("x-openai-actor-authorization")));
-}
-
 #[test]
 fn test_codex_link_url_params_override_the_config_and_refresh_the_bearer_token() {
     let config = serde_json::json!({
@@ -1189,28 +1125,6 @@ fn test_codex_link_url_params_override_the_config_and_refresh_the_bearer_token()
     assert_eq!(doc["model"].as_str(), Some("from-url"));
     // 表里只留一份 Key，和 auth 同值，降级后旧版也不会拿到过期的 Key
     assert_eq!(table["experimental_bearer_token"].as_str(), Some("sk-link"));
-}
-
-#[test]
-fn test_codex_link_config_keeps_same_origin_model_catalog_url() {
-    // #7942
-    let config = serde_json::json!({
-        "config": concat!(
-            "[model_providers.custom]\n",
-            "base_url = \"https://api.relay.example/v1\"\n",
-            "model_catalog_url = \"https://api.relay.example/v1/models?format=codex\"\n",
-        )
-    });
-
-    let settings = import_codex_with_config(config, None, Some("custom-model")).unwrap();
-    assert_eq!(
-        row_config(&settings)["model_providers"]["custom"]["model_catalog_url"].as_str(),
-        Some("https://api.relay.example/v1/models?format=codex")
-    );
-    assert_eq!(
-        projected_route_table(&settings)["model_catalog_url"].as_str(),
-        Some("https://api.relay.example/v1/models?format=codex")
-    );
 }
 
 #[test]
@@ -1249,26 +1163,6 @@ fn test_codex_link_config_rejects_command_and_local_credential_sources() {
         let err = import_codex_with_config(config, None, None).unwrap_err();
         assert!(err.to_string().contains(key), "{key}: {err}");
     }
-}
-
-#[test]
-fn test_codex_link_config_drops_env_key_when_the_link_has_a_key() {
-    let config = serde_json::json!({
-        "config": concat!(
-            "[model_providers.custom]\n",
-            "base_url = \"https://api.relay.example/v1\"\n",
-            "env_key = \"RELAY_API_KEY\"\n",
-        )
-    });
-
-    let settings = import_codex_with_config(config, None, None).unwrap();
-    let doc = row_config(&settings);
-    assert!(doc["model_providers"]["custom"].get("env_key").is_none());
-    // 没有 env_key，切换时 Key 走 bearer token
-    assert_eq!(
-        projected_route_table(&settings)["experimental_bearer_token"].as_str(),
-        Some("sk-link")
-    );
 }
 
 #[test]
@@ -1356,68 +1250,6 @@ fn import_grok_with_config(config_toml: &str) -> Result<serde_json::Value, crate
     };
     let merged = parse_and_merge_config(&request)?;
     Ok(build_provider_from_request(&AppType::GrokBuild, &merged)?.settings_config)
-}
-
-#[test]
-fn test_grok_link_config_keeps_the_selected_profile_fields() {
-    // #6457：显示名、说明、窗口等来自链接的模型表；地址和 Key 用链接参数
-    let settings = import_grok_with_config(concat!(
-        "[models]\ndefault = \"grok-4.6\"\n\n",
-        "[model.\"grok-4.6\"]\nmodel = \"grok-4.6\"\nname = \"Grok 4.6 (Relay)\"\n",
-        "description = \"Fast coding model\"\n",
-        "base_url = \"https://untrusted.example/v1\"\napi_key = \"sk-in-config\"\n",
-        "env_key = \"RELAY_KEY\"\n",
-        "api_backend = \"chat_completions\"\ncontext_window = 256000\n",
-        "reasoning_summary = \"auto\"\nextra_headers = { \"x-relay\" = \"1\" }\n\n",
-        "[model.\"grok-4.5\"]\nmodel = \"grok-4.5\"\nname = \"Grok 4.5\"\n",
-        "base_url = \"https://untrusted.example/v1\"\napi_key = \"sk-in-config\"\n",
-        "api_backend = \"responses\"\ncontext_window = 500000\n",
-    ))
-    .unwrap();
-
-    let text = settings["config"].as_str().unwrap();
-    let doc: toml_edit::DocumentMut = text.parse().unwrap();
-    assert_eq!(doc["models"]["default"].as_str(), Some("grok-4.6"));
-    let table = &doc["model"]["grok-4.6"];
-    assert_eq!(table["name"].as_str(), Some("Grok 4.6 (Relay)"));
-    assert_eq!(table["description"].as_str(), Some("Fast coding model"));
-    assert_eq!(table["api_backend"].as_str(), Some("chat_completions"));
-    assert_eq!(table["context_window"].as_integer(), Some(256000));
-    assert_eq!(table["reasoning_summary"].as_str(), Some("auto"));
-    assert_eq!(table["extra_headers"]["x-relay"].as_str(), Some("1"));
-    assert_eq!(
-        table["base_url"].as_str(),
-        Some("https://api.relay.example/v1")
-    );
-    assert_eq!(table["api_key"].as_str(), Some("xai-link"));
-    assert!(table.get("env_key").is_none(), "{text}");
-    // 一个供应商只拥有一张模型表，其余的不导入
-    assert!(doc["model"].get("grok-4.5").is_none(), "{text}");
-
-    // 行能被投影（切换时写进 live 的就是这张表）
-    let projection = crate::live::project::grok::GrokProjection::of(&settings, false).unwrap();
-    assert_eq!(projection.table_name(), Some("grok-4.6"));
-}
-
-#[test]
-fn test_grok_link_config_fills_template_defaults_for_missing_fields() {
-    let settings = import_grok_with_config(
-        "[models]\ndefault = \"relay\"\n\n[model.relay]\nmodel = \"relay-model\"\n",
-    )
-    .unwrap();
-    let doc: toml_edit::DocumentMut = settings["config"].as_str().unwrap().parse().unwrap();
-    let table = &doc["model"]["relay"];
-    assert_eq!(table["name"].as_str(), Some("Relay Card"));
-    assert_eq!(table["model"].as_str(), Some("relay-model"));
-    assert_eq!(
-        table["api_backend"].as_str(),
-        Some(crate::grok_config::DEFAULT_API_BACKEND)
-    );
-    assert_eq!(
-        table["context_window"].as_integer(),
-        Some(crate::grok_config::DEFAULT_CONTEXT_WINDOW)
-    );
-    crate::live::project::grok::GrokProjection::of(&settings, false).unwrap();
 }
 
 #[test]
@@ -1587,21 +1419,6 @@ fn test_pi_link_with_the_toggle_off_is_saved_without_touching_models_json() {
     assert!(!crate::pi_config::pi_provider_exists(&id).unwrap());
 }
 
-#[test]
-#[serial_test::serial]
-fn test_pi_link_with_the_toggle_on_or_unset_is_added_to_models_json() {
-    let _home = TestHomeGuard::new();
-    let _agent = crate::pi_config::test_support::TestAgentDir::new();
-
-    for enabled in [Some(true), None] {
-        let (_state, id) = import_pi_link(enabled);
-        let node = crate::pi_config::read_pi_native_provider(&id)
-            .unwrap()
-            .expect("node written to models.json");
-        assert_eq!(node["api"], "openai-completions", "{enabled:?}");
-    }
-}
-
 // =============================================================================
 // 累加式应用会解释的写法：命令、环境变量、文件引用
 // =============================================================================
@@ -1704,33 +1521,6 @@ fn import_claude_link(enabled: Option<bool>) -> (AppState, String) {
     let state = AppState::new(db);
     let id = super::import_provider_from_deeplink(&state, request).expect("import provider");
     (state, id)
-}
-
-#[test]
-#[serial_test::serial]
-fn test_first_switch_mode_provider_stays_inactive_when_the_toggle_is_off() {
-    let _home = TestHomeGuard::new();
-
-    for enabled in [Some(false), None] {
-        let (state, id) = import_claude_link(enabled);
-
-        assert!(state
-            .db
-            .get_provider_by_id(&id, "claude")
-            .unwrap()
-            .is_some());
-        let current = crate::mode::current::provider_for(
-            &state.db,
-            &AppType::Claude,
-            crate::mode::current::Purpose::Direct,
-        )
-        .unwrap();
-        assert_eq!(current, None, "{enabled:?}: must not become current");
-        assert!(
-            !crate::config::get_claude_settings_path().exists(),
-            "{enabled:?}: the client config must not be written"
-        );
-    }
 }
 
 // =============================================================================
@@ -1946,44 +1736,4 @@ fn agy_deeplink_prompt_import_respects_activation() {
     assert!(!crate::gemini_config::get_gemini_dir()
         .join("GEMINI.md")
         .exists());
-}
-
-#[test]
-#[cfg(unix)]
-#[serial_test::serial]
-fn agy_deeplink_enabled_key_provider_stays_out_of_live_files() {
-    let _home = TestHomeGuard::new();
-    let state = AppState::new(Arc::new(Database::memory().unwrap()));
-    let request = parse_deeplink_url("ccswitch://v1/import?resource=provider&app=agy&name=Agy&endpoint=https://relay.example&apiKey=fixture&model=link-model&enabled=true").unwrap();
-    let id = super::provider::import_provider_from_deeplink(&state, request).unwrap();
-    // Antigravity cards have no "enable": enabled=true only imports the card.
-    let current = crate::mode::current::provider_for(
-        &state.db,
-        &AppType::Agy,
-        crate::mode::current::Purpose::Direct,
-    )
-    .unwrap();
-    assert_eq!(current, None);
-    // A key card never creates or changes the native settings: it only applies
-    // to agy started from "Open Terminal" with its private profile.
-    assert!(!crate::agy_config::settings_path().exists());
-    assert!(!crate::config::get_home_dir().join(".gemini/.env").exists());
-    let row = state.db.get_provider_by_id(&id, "agy").unwrap().unwrap();
-    let launch = crate::services::provider::agy_direct::terminal_launch(&row).unwrap();
-    assert_eq!(
-        launch.env[0],
-        ("GEMINI_API_KEY", Some("fixture".to_string()))
-    );
-    let private: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(
-            launch
-                .gemini_dir
-                .unwrap()
-                .join("antigravity-cli/settings.json"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(private["model"], "link-model");
-    assert_eq!(private["modelProvider"], "gemini");
 }

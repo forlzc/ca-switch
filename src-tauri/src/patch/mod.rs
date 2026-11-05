@@ -87,7 +87,7 @@ impl LivePatch for Guarded {
         path: &Path,
         pre: Option<&[u8]>,
     ) -> Result<Option<Vec<u8>>, LiveWriteError> {
-        if crate::live::engine::digest(pre) != self.expected_pre {
+        if digest(pre) != self.expected_pre {
             return Err(LiveWriteError::Conflict {
                 path: path.to_path_buf(),
             });
@@ -259,4 +259,24 @@ mod tests {
         assert_eq!(line_column(text, 4), (2, 2));
         assert_eq!(line_column(text, text.len()), (3, 2));
     }
+}
+
+/// 文件内容的 SHA-256，用来判断「打补丁期间文件被别人改过」。
+fn digest(bytes: Option<&[u8]>) -> Option<String> {
+    use sha2::Digest;
+    bytes.map(|bytes| {
+        sha2::Sha256::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    })
+}
+
+/// 字节内容的 SHA-256 十六进制（macOS Keychain 账户名等按路径派生标识时用）。
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }

@@ -1181,59 +1181,6 @@ mod tests {
             .any(|(name, _)| name.as_str() == "copilot-integration-id"));
     }
     #[test]
-    fn copilot_catalog_profile_survives_live_projection_and_format_overrides() {
-        use crate::codex_config::{codex_disables_web_search, CodexCatalogToolProfile};
-        use crate::live::project::codex::{CodexProjection, RowInput};
-
-        for base_url in ["https://api.githubcopilot.com", "http://localhost:15721/v1"] {
-            let mut provider = create_copilot_provider();
-            provider.settings_config = json!({
-                "auth": {},
-                "config": format!(
-                    "model = \"claude-sonnet-5\"\nmodel_provider = \"copilot\"\n\n[model_providers.copilot]\nbase_url = \"{base_url}\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n"
-                )
-            });
-            let projection = CodexProjection::of(&RowInput {
-                settings: &provider.settings_config,
-                official: is_codex_official_provider(&provider),
-                proxy_injected_oauth: provider.uses_proxy_injected_oauth(),
-            })
-            .unwrap();
-            let config = projection.catalog_input_text();
-            let parsed: TomlValue = toml::from_str(&config).unwrap();
-            assert_eq!(parsed["model_provider"].as_str(), Some("custom"));
-            let route = &parsed["model_providers"]["custom"];
-            assert_eq!(route["wire_api"].as_str(), Some("responses"));
-            assert!(route.get("requires_openai_auth").is_none());
-
-            for api_format in [
-                None,
-                Some("openai_chat"),
-                Some("openai_responses"),
-                Some("anthropic"),
-            ] {
-                for transport in [
-                    None,
-                    Some("auto"),
-                    Some("openai_responses"),
-                    Some("openai_chat"),
-                ] {
-                    let meta = provider.meta.as_mut().unwrap();
-                    meta.api_format = api_format.map(str::to_string);
-                    meta.codex_copilot_api_format = transport.map(str::to_string);
-                    let profile = resolve_codex_catalog_tool_profile(&provider);
-                    assert_eq!(profile, CodexCatalogToolProfile::Copilot);
-                    assert!(codex_disables_web_search(
-                        &provider.settings_config,
-                        &config,
-                        profile
-                    ));
-                }
-            }
-        }
-    }
-
-    #[test]
     fn codex_responses_endpoint_detection_ignores_query() {
         assert!(is_codex_responses_endpoint("/responses"));
         assert!(is_codex_responses_endpoint(

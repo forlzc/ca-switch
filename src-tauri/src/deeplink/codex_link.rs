@@ -12,8 +12,7 @@ use toml_edit::{DocumentMut, Item, Table, TableLike, Value};
 use url::Url;
 
 use crate::error::AppError;
-use crate::live::floor;
-use crate::live::project::codex::{ROUTE_ID, ROW_TOP_FIELDS};
+use crate::floor;
 
 /// 选路表里可以从链接带进来的键（Codex 0.162 的 `ModelProviderInfo`，去掉下面两类）。
 const TABLE_KEYS: &[&str] = &[
@@ -105,7 +104,7 @@ impl CodexLinkConfig {
             None => None,
         };
 
-        let top = ROW_TOP_FIELDS
+        let top = floor::CODEX_ROW_TOP_FIELDS
             .iter()
             .chain(floor::CODEX_EXCLUSIVE_TOP)
             .filter_map(|key| {
@@ -154,7 +153,7 @@ impl CodexLinkConfig {
         api_key: &str,
     ) -> Result<String, AppError> {
         let mut doc = DocumentMut::new();
-        doc["model_provider"] = toml_edit::value(ROUTE_ID);
+        doc["model_provider"] = toml_edit::value(floor::CODEX_ROUTE_ID);
         doc["model"] = toml_edit::value(model);
         for (key, value) in self.top.iter().filter(|(key, _)| *key != "model") {
             doc[*key] = Item::Value(value.clone());
@@ -213,7 +212,7 @@ impl CodexLinkConfig {
 
         let mut providers = Table::new();
         providers.set_implicit(true);
-        providers.insert(ROUTE_ID, Item::Table(table));
+        providers.insert(floor::CODEX_ROUTE_ID, Item::Table(table));
         doc["model_providers"] = Item::Table(providers);
         Ok(doc.to_string())
     }

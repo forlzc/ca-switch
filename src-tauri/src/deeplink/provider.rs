@@ -134,7 +134,7 @@ pub fn import_provider_from_deeplink(
     };
 
     if activate || additive {
-        ProviderService::add(state, app_type.clone(), provider, activate)?;
+        ProviderService::add(state, app_type.clone(), provider)?;
     } else {
         ProviderService::add_without_switching(state, app_type.clone(), provider)?;
     }

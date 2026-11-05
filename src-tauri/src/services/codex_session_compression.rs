@@ -1,22 +1,15 @@
 //! Codex 会话压缩开关：`config.toml` 的 `[features] local_thread_store_compression`。
 //!
 //! 开启后 Codex 每次启动在后台把 7 天没动过的 rollout 压成 `.jsonl.zst`
-//! （见 `codex_rollout_file`），CC Switch 的会话管理与用量统计照常读取。
-//! 开关状态以 `config.toml` 为准，不另存设置；写入经写入引擎（首写备份、崩溃恢复）。
+//! （见 `codex_rollout_file`），会话管理与用量统计照常读取。
+//! 开关状态以 `config.toml` 为准，不另存设置；这里只读不写。
 
 use toml_edit::value;
 
-use crate::app_config::AppType;
-use crate::codex_config::{
-    codex_config_feature_enabled, get_codex_config_path, read_codex_config_text,
-};
-use crate::database::Database;
+use crate::codex_config::{codex_config_feature_enabled, read_codex_config_text};
 use crate::error::AppError;
-use crate::live::engine::LiveFile;
-use crate::live::patch::toml::TomlPatch;
-use crate::live::patch::KeyPath;
-use crate::mode::operation::{AppWrite, FileChange};
-use crate::mode::state::{op, PendingTarget};
+use crate::patch::toml::TomlPatch;
+use crate::patch::KeyPath;
 use crate::session_manager::providers::codex::session_roots;
 
 const FEATURE_KEY: &str = "local_thread_store_compression";
@@ -30,23 +23,6 @@ pub fn is_enabled() -> Result<bool, AppError> {
         &read_codex_config_text()?,
         FEATURE_KEY,
     ))
-}
-
-/// 开启写 `true`；关闭删掉这个键（回到 Codex 默认的关闭，也覆盖 `{ enabled = true }` 写法）。
-/// 已经是目标状态时不写文件。返回写入后的状态。
-pub fn set_enabled(db: &Database, enabled: bool) -> Result<bool, AppError> {
-    if is_enabled()? == enabled {
-        return Ok(enabled);
-    }
-    AppWrite::begin(db, AppType::Codex.as_str())?.run(
-        op::APPLY,
-        &[FileChange {
-            file: LiveFile::private(get_codex_config_path()),
-            patch: &patch(enabled),
-        }],
-        PendingTarget::default(),
-    )?;
-    is_enabled()
 }
 
 fn patch(enabled: bool) -> TomlPatch {
@@ -74,7 +50,7 @@ pub fn sessions_disk_usage() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::live::patch::LivePatch;
+    use crate::patch::LivePatch;
     use std::path::Path;
 
     fn apply(enabled: bool, before: &str) -> String {

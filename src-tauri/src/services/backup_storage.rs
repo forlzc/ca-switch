@@ -14,7 +14,6 @@ use crate::codex_history_migration;
 use crate::config::{get_app_config_dir, get_home_dir};
 use crate::database::Database;
 use crate::error::AppError;
-use crate::live::engine::DeviceStore;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -87,10 +86,6 @@ fn categories() -> Vec<Category> {
         whole(
             "codexHistoryProviderMigration",
             app_backups.join(codex_history_migration::MIGRATION_NAME),
-        ),
-        whole(
-            "liveFirstWrite",
-            DeviceStore::for_device().first_write_backup_dir(),
         ),
         whole("hermes", app_backups.join("hermes")),
         whole("openclaw", app_backups.join("openclaw")),

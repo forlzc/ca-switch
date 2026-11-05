@@ -190,10 +190,6 @@ pub async fn set_auto_failover_enabled(
         .await
         .map_err(|e| e.to_string())?;
 
-    if enabled && !crate::mode::current::is_proxy(&app_enum) {
-        return Err("需要先让该应用进入路由模式，再开启故障转移".to_string());
-    }
-
     // 队列为空时把当前供应商自动加入作为 P1，避免用户陷入"必须先加队列才能开启"的死锁
     let mut auto_added_provider_id: Option<String> = None;
     let p1_provider_id = if enabled {
@@ -218,12 +214,10 @@ pub async fn set_auto_failover_enabled(
             .collect::<Vec<_>>();
 
         if queue.is_empty() {
-            let current_id = crate::mode::current::provider_for(
-                &state.db,
-                &app_enum,
-                crate::mode::current::Purpose::InUse,
-            )
-            .map_err(|e| e.to_string())?;
+            let current_id =
+                crate::services::provider::ProviderService::active_provider(&state.db, &app_enum)
+                    .map_err(|e| e.to_string())?
+                    .map(|provider| provider.id);
 
             let Some(current_id) = current_id else {
                 return Err("故障转移队列为空，且未设置当前供应商，无法开启故障转移".to_string());
@@ -264,25 +258,22 @@ pub async fn set_auto_failover_enabled(
 
     // 开启前先切到 P1。只有切换成功后才写入 auto_failover_enabled=true，
     // 避免 P1 不可切换（例如 official provider）时留下“开关已开但目标未切”的脏状态。
-    // Stack 模式不做故障转移，切换在锁内拒绝（见 `switch_route_for_failover`）。
     if enabled {
-        if let Err(e) = crate::mode::controller::switch_route_for_failover(
+        if let Err(e) = crate::services::provider::ProviderService::switch(
             state.inner(),
-            &app_enum,
+            app_enum.clone(),
             &p1_provider_id,
-        )
-        .await
-        {
+        ) {
             if let Some(provider_id) = auto_added_provider_id {
                 let _ = state.db.remove_from_failover_queue(&app_type, &provider_id);
             }
-            return Err(e);
+            return Err(e.to_string());
         }
     }
 
-    // 更新 auto_failover_enabled 字段（enabled 是模式的镜像，保持和模式一致）
+    // 更新 auto_failover_enabled 字段（enabled 是本地路由总开关的镜像）
     config.auto_failover_enabled = enabled;
-    config.enabled = crate::mode::current::is_proxy(&app_enum);
+    config.enabled = state.proxy_service.is_running().await;
 
     // 写回数据库
     state

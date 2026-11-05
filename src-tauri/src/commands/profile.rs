@@ -69,14 +69,14 @@ pub fn emit_profile_apply_events(
     for app_type in scope.apps().iter() {
         let app_str = app_type.as_str();
         let (_, auto_failover_enabled) = state.db.get_proxy_flags_sync(app_str);
-        let proxy_enabled = crate::mode::current::is_proxy(app_type);
-        let provider_id = crate::mode::current::provider_for(
+        let proxy_enabled = state.proxy_service.running_now() == Some(true);
+        let provider_id = crate::services::provider::ProviderService::active_provider(
             &state.db,
             app_type,
-            crate::mode::current::Purpose::InUse,
         )
         .ok()
         .flatten()
+        .map(|provider| provider.id)
         .unwrap_or_default();
         let event_data = serde_json::json!({
             "appType": app_str,

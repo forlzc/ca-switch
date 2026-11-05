@@ -5232,7 +5232,14 @@ pub async fn open_provider_terminal(
             switch_agy_to_bound_account(&agy_accounts.0, provider).await?;
             agy_terminal_launch(provider)?
         }
-        AppType::Codex => codex_terminal_launch(state.db.as_ref(), provider)?,
+        AppType::Codex => {
+            let env_vars = extract_env_vars_from_config(&provider.settings_config, &app_type);
+            let env = env_vars
+                .iter()
+                .map(|(key, value)| (Box::leak(key.clone().into_boxed_str()) as &'static str, Some(value.clone())))
+                .collect();
+            codex_launch(&provider.name, Vec::new(), env, Vec::new())?
+        }
         AppType::Claude => {
             use crate::services::provider::claude_official::{terminal_account, AccountTerminal};
             match terminal_account(provider).map_err(|e| e.to_string())? {
@@ -5250,21 +5257,13 @@ pub async fn open_provider_terminal(
                 None => {
                     let env_vars =
                         extract_env_vars_from_config(&provider.settings_config, &app_type);
-                    let drops = crate::services::provider::claude_switch_drops(
-                        state.inner(),
-                        &provider.settings_config,
-                    )
-                    .unwrap_or_else(|e| {
-                        log::warn!("计算终端要挡住的 live 键失败，按原样启动: {e}");
-                        Default::default()
-                    });
-                    claude_terminal_launch(&env_vars, &providerId, &provider.name, &drops)?
+                    claude_terminal_launch(&env_vars, &providerId, &provider.name)?
                 }
             }
         }
         _ => {
             let env_vars = extract_env_vars_from_config(&provider.settings_config, &app_type);
-            claude_terminal_launch(&env_vars, &providerId, &provider.name, &Default::default())?
+            claude_terminal_launch(&env_vars, &providerId, &provider.name)?
         }
     };
     if skipPermissions == Some(true) {
@@ -5508,29 +5507,6 @@ const CODEX_OVERRIDE_BATCH_VARS: [&str; 24] = [
     "CC_SWITCH_CODEX_C23",
 ];
 
-/// Codex：卡就是当前直连的那家时直接跑 `codex`；否则用 `-c` 只对这个进程换成它，Key 经
-/// 环境变量传（见 `codex_terminal`），不改 `config.toml`。
-fn codex_terminal_launch(
-    db: &crate::database::Database,
-    provider: &crate::provider::Provider,
-) -> Result<ProviderLaunch, String> {
-    use crate::services::provider::codex_terminal;
-    let plan = codex_terminal::terminal_launch(db, provider).map_err(|e| e.to_string())?;
-    let mut overrides = plan.overrides;
-    let mut cleanup = Vec::new();
-    if let Some(catalog) = plan.catalog {
-        let path = unique_temp_path("codex_catalog", "json");
-        std::fs::write(&path, catalog).map_err(|e| format!("写入临时模型目录失败: {e}"))?;
-        overrides.push(codex_terminal::catalog_override(&path.to_string_lossy()));
-        cleanup.push(path);
-    }
-    codex_launch(&provider.name, overrides, plan.env, cleanup.clone()).inspect_err(|_| {
-        for file in &cleanup {
-            let _ = std::fs::remove_file(file);
-        }
-    })
-}
-
 fn codex_launch(
     name: &str,
     overrides: Vec<String>,
@@ -5586,10 +5562,9 @@ fn claude_terminal_launch(
     env_vars: &[(String, String)],
     provider_id: &str,
     provider_name: &str,
-    drops: &crate::services::provider::SwitchDrops,
 ) -> Result<ProviderLaunch, String> {
     let config_file = unique_temp_path(&format!("claude_{provider_id}"), "json");
-    write_claude_config(&config_file, env_vars, provider_name, drops)?;
+    write_claude_config(&config_file, env_vars, provider_name)?;
     let config_name = config_file
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -5967,13 +5942,20 @@ fn write_unix_launcher(
 ///   终端，选了就把别家的模型发给这张卡；
 /// - 切换会清掉、卡上又没有的键（`drops`）写成空值挡住：Claude Code 把空串当没设（2.1.314
 ///   实测：代理的占位凭据不再随请求发出，没配的档位回到内置模型）。
+/// 把这张卡的配置写成 `claude --settings <文件>` 用的临时文件。
+///
+/// `--settings` 是叠在用户级 `settings.json` 之上的：用户级里那些指向别家的键（地址、
+/// 凭据、模型名）不会因为这里没写而被顶掉，所以要显式挡住 —— 关键字段逐项写空，`env`
+/// 里的空字符串等于没有，顶层写 `null` 等于未设置。`modelPicker` 按层级整个胜出，写一个
+/// 空菜单让 `/model` 显示 Claude Code 内置的那份。
 fn write_claude_config(
     config_file: &std::path::Path,
     env_vars: &[(String, String)],
-    provider_name: &str,
-    drops: &crate::services::provider::SwitchDrops,
+    _provider_name: &str,
 ) -> Result<(), String> {
+    use crate::floor;
     use serde_json::Value;
+
     let mut config_obj = serde_json::Map::new();
     let mut env_obj = serde_json::Map::new();
 
@@ -5981,23 +5963,23 @@ fn write_claude_config(
         env_obj.insert(key.clone(), Value::String(value.clone()));
     }
 
-    let model_picker = crate::live::project::claude::terminal_model_picker(&env_obj, provider_name);
-    for key in drops.env.keys() {
+    for key in floor::CLAUDE_FLOOR_ENV_KEYS
+        .iter()
+        .chain(floor::CLAUDE_PROTOCOL_SELECTORS)
+        .chain(floor::CLAUDE_EXCLUSIVE_ENV)
+    {
         env_obj
-            .entry(key.clone())
+            .entry((*key).to_string())
             .or_insert_with(|| Value::String(String::new()));
     }
-    for (key, value) in &drops.top {
-        let empty = match value {
-            Value::String(_) => Value::String(String::new()),
-            Value::Object(_) => Value::Object(serde_json::Map::new()),
-            Value::Array(_) => Value::Array(Vec::new()),
-            _ => continue,
-        };
-        config_obj.insert(key.clone(), empty);
+    for key in floor::CLAUDE_FLOOR_TOP {
+        config_obj.insert((*key).to_string(), Value::Null);
     }
     config_obj.insert("env".to_string(), Value::Object(env_obj));
-    config_obj.insert("modelPicker".to_string(), model_picker);
+    config_obj.insert(
+        "modelPicker".to_string(),
+        serde_json::json!({"replaceBuiltInOptions": false, "options": []}),
+    );
 
     let config_json =
         serde_json::to_string_pretty(&config_obj).map_err(|e| format!("序列化配置失败: {e}"))?;
@@ -7717,153 +7699,6 @@ mod tests {
                 "CC_SWITCH_INTERNAL_ENV_2".to_string(),
                 r"C:\Users\张三\.cc-switch\agy\relay".to_string()
             )]
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn claude_terminal_config_is_private() {
-        use std::os::unix::fs::PermissionsExt;
-        let launch = claude_terminal_launch(
-            &[("ANTHROPIC_AUTH_TOKEN".into(), "t".into())],
-            "p",
-            "P",
-            &Default::default(),
-        )
-        .unwrap();
-        let file = &launch.cleanup[0];
-        assert_eq!(
-            std::fs::metadata(file).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-        assert_eq!(
-            launch.args,
-            vec![
-                "--settings".to_string(),
-                file.to_string_lossy().into_owned()
-            ]
-        );
-        std::fs::remove_file(file).unwrap();
-    }
-
-    #[test]
-    fn claude_terminal_config_writes_the_cards_own_model_picker() {
-        let read = |env: &[(&str, &str)]| {
-            let env: Vec<(String, String)> = env
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
-            let launch =
-                claude_terminal_launch(&env, "p", "DeepSeek", &Default::default()).unwrap();
-            let file = &launch.cleanup[0];
-            let value: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
-            std::fs::remove_file(file).unwrap();
-            value["modelPicker"].clone()
-        };
-
-        // 卡上显式配了档位：只列这几档，`model` 写档位别名。
-        let picker = read(&[
-            ("ANTHROPIC_MODEL", "deepseek-v4-pro"),
-            ("ANTHROPIC_DEFAULT_OPUS_MODEL", "deepseek-v4-pro[1M]"),
-            ("ANTHROPIC_DEFAULT_HAIKU_MODEL", "deepseek-v4-flash"),
-            ("ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME", "Flash"),
-        ]);
-        assert_eq!(
-            picker,
-            serde_json::json!({
-                "replaceBuiltInOptions": true,
-                "options": [
-                    {
-                        "model": "opus",
-                        "label": "Opus · deepseek-v4-pro",
-                        "description": "DeepSeek · deepseek-v4-pro · 1M",
-                    },
-                    {
-                        "model": "haiku",
-                        "label": "Haiku · Flash",
-                        "description": "DeepSeek · deepseek-v4-flash",
-                    },
-                ],
-            })
-        );
-
-        // 一档都没配：空菜单，挡住用户级菜单，显示内置的。
-        let picker = read(&[("ANTHROPIC_MODEL", "deepseek-v4-pro")]);
-        assert_eq!(
-            picker,
-            serde_json::json!({ "replaceBuiltInOptions": false, "options": [] })
-        );
-    }
-
-    #[test]
-    fn claude_terminal_config_shadows_what_the_switch_clears() {
-        let drops = crate::services::provider::SwitchDrops {
-            env: serde_json::json!({
-                "ANTHROPIC_AUTH_TOKEN": "PROXY_MANAGED",
-                "ANTHROPIC_DEFAULT_OPUS_MODEL": "ccs-claude-kimi--k3[1M]",
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
-            top: serde_json::json!({
-                "model": "ccs-claude-kimi--k3[1M]",
-                "modelOverrides": { "a": "b" },
-                "modelPicker": { "replaceBuiltInOptions": true, "options": [] },
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
-        };
-        let launch = claude_terminal_launch(
-            &[
-                ("ANTHROPIC_API_KEY".into(), "sk".into()),
-                (
-                    "ANTHROPIC_DEFAULT_OPUS_MODEL".into(),
-                    "deepseek-v4-pro".into(),
-                ),
-            ],
-            "p",
-            "DeepSeek",
-            &drops,
-        )
-        .unwrap();
-        let file = &launch.cleanup[0];
-        let value: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
-        std::fs::remove_file(file).unwrap();
-
-        // 卡上有的照写，没有的写空值挡住用户级的。
-        assert_eq!(value["env"]["ANTHROPIC_API_KEY"], "sk");
-        assert_eq!(
-            value["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"],
-            "deepseek-v4-pro"
-        );
-        assert_eq!(value["env"]["ANTHROPIC_AUTH_TOKEN"], "");
-        assert_eq!(value["model"], "");
-        assert_eq!(value["modelOverrides"], serde_json::json!({}));
-        // 菜单写卡自己的，不是空对象。
-        assert_eq!(value["modelPicker"]["options"][0]["model"], "opus");
-    }
-
-    #[test]
-    fn claude_terminal_config_without_drops_writes_only_the_card() {
-        let launch = claude_terminal_launch(
-            &[("ANTHROPIC_MODEL".into(), "deepseek-v4-pro".into())],
-            "p",
-            "DeepSeek",
-            &Default::default(),
-        )
-        .unwrap();
-        let file = &launch.cleanup[0];
-        let value: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
-        std::fs::remove_file(file).unwrap();
-        let keys: Vec<&String> = value.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["env", "modelPicker"]);
-        assert_eq!(
-            value["modelPicker"],
-            serde_json::json!({ "replaceBuiltInOptions": false, "options": [] })
         );
     }
 

@@ -3,7 +3,6 @@ use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::hermes_config;
-use crate::store::AppState;
 
 /// Error string returned when `open_hermes_web_ui` cannot reach the Hermes
 /// FastAPI server. Kept in sync with the `HERMES_WEB_OFFLINE_ERROR` constant
@@ -14,15 +13,6 @@ const HERMES_WEB_OFFLINE_ERROR: &str = "hermes_web_offline";
 // Hermes Provider Commands
 // ============================================================================
 
-/// Import providers from Hermes live config to database.
-///
-/// Hermes uses additive mode — users may already have providers
-/// configured in config.yaml.
-#[tauri::command]
-pub fn import_hermes_providers_from_live(state: State<'_, AppState>) -> Result<usize, String> {
-    crate::services::provider::import_hermes_providers_from_live(state.inner())
-        .map_err(|e| e.to_string())
-}
 
 /// Get provider names in the Hermes live config.
 #[tauri::command]

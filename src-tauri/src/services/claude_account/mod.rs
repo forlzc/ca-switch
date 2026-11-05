@@ -417,13 +417,6 @@ impl ClaudeAccountManager {
                 log::info!("[ClaudeAccount] 同一账号重新登录，替换旧目录");
                 self.discard_dir(&old.local_id).await;
             }
-            // 它正在默认槽位里时，默认槽位里还是旧登录：换成这次的
-            let key = found.key.clone();
-            let config_dir = config_dir.clone();
-            let _ = tokio::task::spawn_blocking(move || {
-                crate::services::provider::claude_official::replace_live_login(&key, &config_dir)
-            })
-            .await;
         }
         log::info!("[ClaudeAccount] 已添加账号");
         Ok(Some(account))
