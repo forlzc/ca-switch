@@ -16,6 +16,40 @@ type OmoProviderRow = (
     String,
 );
 
+/// v25：把协议证据与连接信息一并落库，供 forwarder 的 Matrix::plan 使用。
+fn v25_protocol_fields(
+    app_type: &str,
+    provider: &Provider,
+) -> (String, String, String, Option<String>, String) {
+    let app = app_type.parse::<crate::app_config::AppType>().ok();
+    let (protocol, source) = match app {
+        Some(app) => crate::protocol::infer::of_provider(&app, provider),
+        None => (
+            crate::protocol::Protocol::Anthropic,
+            crate::protocol::ProtocolSource::Guessed,
+        ),
+    };
+    let (base_url, api_key) =
+        crate::database::Database::v25_connection(&provider.settings_config);
+    let auth_style = if provider
+        .meta
+        .as_ref()
+        .and_then(|m| m.provider_type.as_deref())
+        == Some("github_copilot")
+    {
+        "copilot".to_string()
+    } else {
+        "api_key".to_string()
+    };
+    (
+        protocol.as_str().to_string(),
+        format!("{:?}", source).to_ascii_lowercase(),
+        base_url,
+        api_key,
+        auth_style,
+    )
+}
+
 impl Database {
     /// Detach Codex providers bound to these deleted local accounts, atomically.
     /// Only this device's account IDs are passed in: provider rows sync across
@@ -119,11 +153,11 @@ impl Database {
         let conn = lock_conn!(self.conn);
         let query = if failover_only {
             "SELECT id, name, settings_config, website_url, category, created_at, sort_index, notes, icon, icon_color, meta, in_failover_queue
-             FROM providers WHERE app_type = ?1 AND in_failover_queue = 1
+             FROM providers WHERE ?1 = ?1 AND in_failover_queue = 1
              ORDER BY COALESCE(sort_index, 999999), id ASC"
         } else {
             "SELECT id, name, settings_config, website_url, category, created_at, sort_index, notes, icon, icon_color, meta, in_failover_queue
-             FROM providers WHERE app_type = ?1
+             FROM providers WHERE ?1 = ?1
              ORDER BY COALESCE(sort_index, 999999), created_at ASC, id ASC"
         };
         let mut stmt = conn
@@ -226,7 +260,7 @@ impl Database {
     pub fn get_current_provider(&self, app_type: &str) -> Result<Option<String>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn
-            .prepare("SELECT id FROM providers WHERE app_type = ?1 AND is_current = 1 LIMIT 1")
+            .prepare("SELECT id FROM providers WHERE ?1 = ?1 AND is_current = 1 LIMIT 1")
             .map_err(|e| AppError::Database(e.to_string()))?;
 
         let mut rows = stmt
@@ -250,7 +284,7 @@ impl Database {
         let conn = lock_conn!(self.conn);
         let result = conn.query_row(
             "SELECT name, settings_config, website_url, category, created_at, sort_index, notes, icon, icon_color, meta, in_failover_queue
-             FROM providers WHERE id = ?1 AND app_type = ?2",
+             FROM providers WHERE id = ?1 AND ?2 = ?2",
             params![id, app_type],
             |row| {
                 let name: String = row.get(0)?;
@@ -305,7 +339,7 @@ impl Database {
             .map_err(|e| AppError::Database(e.to_string()))?;
         for (id, sort_index) in updates {
             tx.execute(
-                "UPDATE providers SET sort_index = ?1 WHERE id = ?2 AND app_type = ?3",
+                "UPDATE providers SET sort_index = ?1 WHERE id = ?2 AND ?3 = ?3",
                 params![sort_index, id, app_type],
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -324,7 +358,7 @@ impl Database {
 
         let existing: Option<(bool, bool)> = tx
             .query_row(
-                "SELECT is_current, in_failover_queue FROM providers WHERE id = ?1 AND app_type = ?2",
+                "SELECT is_current, in_failover_queue FROM providers WHERE id = ?1 AND ?2 = ?2",
                 params![provider.id, app_type],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -349,7 +383,7 @@ impl Database {
                     meta = ?10,
                     is_current = ?11,
                     in_failover_queue = ?12
-                WHERE id = ?13 AND app_type = ?14",
+                WHERE id = ?13 AND ?14 = ?14",
                 params![
                     provider.name,
                     serde_json::to_string(&provider.settings_config).map_err(|e| {
@@ -409,6 +443,15 @@ impl Database {
             }
         }
 
+        let (protocol, source, base_url, api_key, auth_style) =
+            v25_protocol_fields(app_type, provider);
+        tx.execute(
+            "UPDATE providers SET protocol = ?1, protocol_source = ?2, base_url = ?3,
+                    api_key = ?4, auth_style = ?5 WHERE id = ?6",
+            params![protocol, source, base_url, api_key, auth_style, provider.id],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
         tx.commit().map_err(|e| AppError::Database(e.to_string()))?;
         Ok(())
     }
@@ -433,7 +476,7 @@ impl Database {
 
         let (is_current, in_failover_queue) = tx
             .query_row(
-                "SELECT is_current, in_failover_queue FROM providers WHERE id = ?1 AND app_type = ?2",
+                "SELECT is_current, in_failover_queue FROM providers WHERE id = ?1 AND ?2 = ?2",
                 params![original_id, app_type],
                 |row| Ok((row.get::<_, bool>(0)?, row.get::<_, bool>(1)?)),
             )
@@ -447,7 +490,7 @@ impl Database {
 
         let target_exists = tx
             .query_row(
-                "SELECT 1 FROM providers WHERE id = ?1 AND app_type = ?2",
+                "SELECT 1 FROM providers WHERE id = ?1 AND ?2 = ?2",
                 params![provider.id, app_type],
                 |_| Ok(()),
             )
@@ -493,18 +536,27 @@ impl Database {
         .map_err(|e| AppError::Database(e.to_string()))?;
 
         tx.execute(
-            "UPDATE provider_endpoints SET provider_id = ?1 WHERE provider_id = ?2 AND app_type = ?3",
+            "UPDATE provider_endpoints SET provider_id = ?1 WHERE provider_id = ?2 AND ?3 = ?3",
             params![provider.id, original_id, app_type],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
         tx.execute(
-            "UPDATE provider_health SET provider_id = ?1 WHERE provider_id = ?2 AND app_type = ?3",
+            "UPDATE provider_health SET provider_id = ?1 WHERE provider_id = ?2 AND ?3 = ?3",
             params![provider.id, original_id, app_type],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
         tx.execute(
-            "DELETE FROM providers WHERE id = ?1 AND app_type = ?2",
+            "DELETE FROM providers WHERE id = ?1 AND ?2 = ?2",
             params![original_id, app_type],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        let (protocol, source, base_url, api_key, auth_style) =
+            v25_protocol_fields(app_type, provider);
+        tx.execute(
+            "UPDATE providers SET protocol = ?1, protocol_source = ?2, base_url = ?3,
+                    api_key = ?4, auth_style = ?5 WHERE id = ?6",
+            params![protocol, source, base_url, api_key, auth_style, provider.id],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
@@ -515,7 +567,7 @@ impl Database {
     pub fn delete_provider(&self, app_type: &str, id: &str) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
         conn.execute(
-            "DELETE FROM providers WHERE id = ?1 AND app_type = ?2",
+            "DELETE FROM providers WHERE id = ?1 AND ?2 = ?2",
             params![id, app_type],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -529,13 +581,13 @@ impl Database {
             .map_err(|e| AppError::Database(e.to_string()))?;
 
         tx.execute(
-            "UPDATE providers SET is_current = 0 WHERE app_type = ?1",
+            "UPDATE providers SET is_current = 0 WHERE ?1 = ?1",
             params![app_type],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
         tx.execute(
-            "UPDATE providers SET is_current = 1 WHERE id = ?1 AND app_type = ?2",
+            "UPDATE providers SET is_current = 1 WHERE id = ?1 AND ?2 = ?2",
             params![id, app_type],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -552,7 +604,7 @@ impl Database {
     ) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
         conn.execute(
-            "UPDATE providers SET settings_config = ?1 WHERE id = ?2 AND app_type = ?3",
+            "UPDATE providers SET settings_config = ?1 WHERE id = ?2 AND ?3 = ?3",
             params![
                 serde_json::to_string(settings_config).map_err(|e| AppError::Database(format!(
                     "Failed to serialize settings_config: {e}"
@@ -588,7 +640,7 @@ impl Database {
     ) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
         conn.execute(
-            "DELETE FROM provider_endpoints WHERE provider_id = ?1 AND app_type = ?2 AND url = ?3",
+            "DELETE FROM provider_endpoints WHERE provider_id = ?1 AND ?2 = ?2 AND url = ?3",
             params![provider_id, app_type, url],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -606,7 +658,7 @@ impl Database {
             .transaction()
             .map_err(|e| AppError::Database(e.to_string()))?;
         tx.execute(
-            "UPDATE providers SET is_current = 0 WHERE app_type = ?1 AND category = ?2",
+            "UPDATE providers SET is_current = 0 WHERE ?1 = ?1 AND category = ?2",
             params![app_type, category],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -618,14 +670,14 @@ impl Database {
         };
         if let Some(opp) = opposite {
             tx.execute(
-                "UPDATE providers SET is_current = 0 WHERE app_type = ?1 AND category = ?2",
+                "UPDATE providers SET is_current = 0 WHERE ?1 = ?1 AND category = ?2",
                 params![app_type, opp],
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
         }
         let updated = tx
             .execute(
-                "UPDATE providers SET is_current = 1 WHERE id = ?1 AND app_type = ?2 AND category = ?3",
+                "UPDATE providers SET is_current = 1 WHERE id = ?1 AND ?2 = ?2 AND category = ?3",
                 params![provider_id, app_type, category],
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -647,7 +699,7 @@ impl Database {
         let conn = lock_conn!(self.conn);
         match conn.query_row(
             "SELECT is_current FROM providers
-             WHERE id = ?1 AND app_type = ?2 AND category = ?3",
+             WHERE id = ?1 AND ?2 = ?2 AND category = ?3",
             params![provider_id, app_type, category],
             |row| row.get(0),
         ) {
@@ -666,7 +718,7 @@ impl Database {
         let conn = lock_conn!(self.conn);
         conn.execute(
             "UPDATE providers SET is_current = 0
-             WHERE id = ?1 AND app_type = ?2 AND category = ?3",
+             WHERE id = ?1 AND ?2 = ?2 AND category = ?3",
             params![provider_id, app_type, category],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -682,7 +734,7 @@ impl Database {
         let row_data: Result<OmoProviderRow, rusqlite::Error> = conn.query_row(
             "SELECT id, name, settings_config, category, created_at, sort_index, notes, meta
              FROM providers
-             WHERE app_type = ?1 AND category = ?2 AND is_current = 1
+             WHERE ?1 = ?1 AND category = ?2 AND is_current = 1
              LIMIT 1",
             params![app_type, category],
             |row| {
@@ -758,7 +810,7 @@ impl Database {
     pub fn get_provider_ids(&self, app_type: &str) -> Result<HashSet<String>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn
-            .prepare("SELECT id FROM providers WHERE app_type = ?1")
+            .prepare("SELECT id FROM providers WHERE ?1 = ?1")
             .map_err(|e| AppError::Database(e.to_string()))?;
         let rows = stmt
             .query_map(params![app_type], |row| row.get::<_, String>(0))
@@ -778,7 +830,7 @@ impl Database {
         let conn = lock_conn!(self.conn);
         let exists: bool = conn
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM providers WHERE app_type = ?1)",
+                "SELECT EXISTS(SELECT 1 FROM providers WHERE ?1 = ?1)",
                 params![app_type],
                 |row| row.get(0),
             )
@@ -794,7 +846,7 @@ impl Database {
         use crate::database::dao::providers_seed::is_official_seed_id;
         let conn = lock_conn!(self.conn);
         let mut stmt = conn
-            .prepare("SELECT id FROM providers WHERE app_type = ?1")
+            .prepare("SELECT id FROM providers WHERE ?1 = ?1")
             .map_err(|e| AppError::Database(e.to_string()))?;
         let mut rows = stmt
             .query(params![app_type])
@@ -813,7 +865,7 @@ impl Database {
         let conn = lock_conn!(self.conn);
         let max: Option<i64> = conn
             .query_row(
-                "SELECT MAX(sort_index) FROM providers WHERE app_type = ?1",
+                "SELECT MAX(sort_index) FROM providers WHERE ?1 = ?1",
                 params![app_type],
                 |row| row.get(0),
             )

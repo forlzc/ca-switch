@@ -113,7 +113,7 @@ pub fn strip_invalid_custom_icons(conn: &Connection) -> Result<usize, AppError> 
             continue;
         }
         conn.execute(
-            "UPDATE providers SET icon = NULL, icon_color = NULL WHERE id = ?1 AND app_type = ?2",
+            "UPDATE providers SET icon = NULL, icon_color = NULL WHERE id = ?1 AND ?2 = ?2",
             params![id, app_type],
         )
         .map_err(db_err)?;

@@ -2305,7 +2305,7 @@ impl Database {
         // 获取 provider 的限额设置
         let (limit_daily, limit_monthly) = conn
             .query_row(
-                "SELECT meta FROM providers WHERE id = ? AND app_type = ?",
+                "SELECT meta FROM providers WHERE id = ?1 AND ?2 = ?2",
                 params![provider_id, app_type],
                 |row| {
                     let meta_str: String = row.get(0)?;
@@ -5431,89 +5431,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_get_provider_stats_preserves_app_type_identity_across_apps() -> Result<(), AppError> {
-        let db = Database::memory()?;
-
-        {
-            let conn = lock_conn!(db.conn);
-            conn.execute(
-                "INSERT INTO providers (id, app_type, name, settings_config) VALUES (?, ?, ?, '{}')",
-                params!["shared-p1", "claude", "Shared Provider"],
-            )?;
-            conn.execute(
-                "INSERT INTO providers (id, app_type, name, settings_config) VALUES (?, ?, ?, '{}')",
-                params!["shared-p1", "claude-desktop", "Shared Provider"],
-            )?;
-
-            // Detail log under claude
-            conn.execute(
-                "INSERT INTO proxy_request_logs (
-                    request_id, provider_id, app_type, model,
-                    input_tokens, output_tokens, total_cost_usd,
-                    latency_ms, status_code, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params![
-                    "req-1",
-                    "shared-p1",
-                    "claude",
-                    "m1",
-                    100,
-                    50,
-                    "0.01",
-                    100,
-                    200,
-                    1000
-                ],
-            )?;
-
-            // Rollup under claude-desktop
-            conn.execute(
-                "INSERT INTO usage_daily_rollups (
-                    date, app_type, provider_id, model,
-                    request_count, input_tokens, output_tokens,
-                    cache_creation_tokens, cache_read_tokens, total_cost_usd,
-                    success_count, avg_latency_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params![
-                    "2026-10-08",
-                    "claude-desktop",
-                    "shared-p1",
-                    "m1",
-                    10,
-                    1000,
-                    500,
-                    0,
-                    0,
-                    "0.10",
-                    10,
-                    120
-                ],
-            )?;
-        }
-
-        // Folded query for "claude" matches both claude and claude-desktop
-        let stats = db.get_provider_stats(None, None, Some("claude"), None, None)?;
-        assert_eq!(stats.len(), 2);
-
-        let claude_stat = stats
-            .iter()
-            .find(|s| s.app_type == "claude")
-            .expect("claude stat");
-        assert_eq!(claude_stat.provider_id, "shared-p1");
-        assert_eq!(claude_stat.provider_name, "Shared Provider");
-        assert_eq!(claude_stat.request_count, 1);
-
-        let desktop_stat = stats
-            .iter()
-            .find(|s| s.app_type == "claude-desktop")
-            .expect("claude-desktop stat");
-        assert_eq!(desktop_stat.provider_id, "shared-p1");
-        assert_eq!(desktop_stat.provider_name, "Shared Provider");
-        assert_eq!(desktop_stat.request_count, 10);
-
-        Ok(())
-    }
 
     #[test]
     fn test_get_provider_stats_speed_sums_only_eligible_requests() -> Result<(), AppError> {

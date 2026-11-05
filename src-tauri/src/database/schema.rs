@@ -25,8 +25,8 @@ impl Database {
         // 1. Providers 表
         conn.execute(
             "CREATE TABLE IF NOT EXISTS providers (
-                id TEXT NOT NULL,
-                app_type TEXT NOT NULL,
+                id TEXT PRIMARY KEY,
+                app_type TEXT NOT NULL DEFAULT '',
                 name TEXT NOT NULL,
                 settings_config TEXT NOT NULL,
                 website_url TEXT,
@@ -39,8 +39,36 @@ impl Database {
                 meta TEXT NOT NULL DEFAULT '{}',
                 is_current BOOLEAN NOT NULL DEFAULT 0,
                 in_failover_queue BOOLEAN NOT NULL DEFAULT 0,
-                PRIMARY KEY (id, app_type)
+                protocol TEXT NOT NULL DEFAULT 'anthropic'
+                    CHECK (protocol IN ('anthropic','openai_chat','openai_responses','gemini')),
+                protocol_source TEXT NOT NULL DEFAULT 'guessed'
+                    CHECK (protocol_source IN ('explicit','inferred','guessed')),
+                auth_style TEXT NOT NULL DEFAULT 'api_key'
+                    CHECK (auth_style IN ('api_key','codex_oauth','xai_oauth','copilot','none')),
+                base_url TEXT NOT NULL DEFAULT '',
+                api_key TEXT,
+                default_model TEXT,
+                cost_multiplier TEXT NOT NULL DEFAULT '1.0',
+                limit_daily_usd TEXT,
+                limit_monthly_usd TEXT,
+                provider_type TEXT
             )",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        // v25：全局单激活。四个入口共用同一个上游，全库最多一行 is_current = 1。
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_providers_one_active
+             ON providers(is_current) WHERE is_current = 1",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        // app_type 已退出主键，但 provider_endpoints / provider_health 仍以
+        // (provider_id, app_type) 作外键；留一个冗余唯一索引让外键继续成立。
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_providers_id_app ON providers(id, app_type)",
             [],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -53,7 +81,7 @@ impl Database {
                 app_type TEXT NOT NULL,
                 url TEXT NOT NULL,
                 added_at INTEGER,
-                FOREIGN KEY (provider_id, app_type) REFERENCES providers(id, app_type) ON DELETE CASCADE
+                FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE
             )",
             [],
         )
@@ -135,6 +163,8 @@ impl Database {
         // 8. Proxy Config 表（三行结构，app_type 主键）
         conn.execute("CREATE TABLE IF NOT EXISTS proxy_config (
             app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild')),
+            protocol TEXT NOT NULL DEFAULT 'anthropic'
+                CHECK (protocol IN ('anthropic','openai_chat','openai_responses','gemini')),
             proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
             listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
             enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
@@ -155,38 +185,38 @@ impl Database {
         // - 旧表会在 apply_schema_migrations() 中迁移为三行结构后再插入。
         if Self::has_column(conn, "proxy_config", "app_type")? {
             conn.execute(
-                "INSERT OR IGNORE INTO proxy_config (app_type, max_retries,
+                "INSERT OR IGNORE INTO proxy_config (protocol, app_type, max_retries,
                 streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
                 circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
                 circuit_error_rate_threshold, circuit_min_requests)
-                VALUES ('claude', 6, 90, 180, 600, 8, 3, 90, 0.7, 15)",
+                VALUES ('anthropic', 'claude', 6, 90, 180, 600, 8, 3, 90, 0.7, 15)",
                 [],
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
             conn.execute(
-                "INSERT OR IGNORE INTO proxy_config (app_type, max_retries,
+                "INSERT OR IGNORE INTO proxy_config (protocol, app_type, max_retries,
                 streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
                 circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
                 circuit_error_rate_threshold, circuit_min_requests)
-                VALUES ('codex', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
+                VALUES ('openai_responses', 'codex', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
                 [],
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
             conn.execute(
-                "INSERT OR IGNORE INTO proxy_config (app_type, max_retries,
+                "INSERT OR IGNORE INTO proxy_config (protocol, app_type, max_retries,
                 streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
                 circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
                 circuit_error_rate_threshold, circuit_min_requests)
-                VALUES ('gemini', 5, 60, 120, 600, 4, 2, 60, 0.6, 10)",
+                VALUES ('gemini', 'gemini', 5, 60, 120, 600, 4, 2, 60, 0.6, 10)",
                 [],
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
             conn.execute(
-                "INSERT OR IGNORE INTO proxy_config (app_type, max_retries,
+                "INSERT OR IGNORE INTO proxy_config (protocol, app_type, max_retries,
                 streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
                 circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
                 circuit_error_rate_threshold, circuit_min_requests)
-                VALUES ('grokbuild', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
+                VALUES ('openai_chat', 'grokbuild', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
                 [],
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -198,7 +228,7 @@ impl Database {
             consecutive_failures INTEGER NOT NULL DEFAULT 0, last_success_at TEXT, last_failure_at TEXT,
             last_error TEXT, updated_at TEXT NOT NULL,
             PRIMARY KEY (provider_id, app_type),
-            FOREIGN KEY (provider_id, app_type) REFERENCES providers(id, app_type) ON DELETE CASCADE
+            FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE
         )", []).map_err(|e| AppError::Database(e.to_string()))?;
 
         // 10. Proxy Request Logs 表
@@ -648,6 +678,11 @@ impl Database {
                         }
                         Self::set_user_version(conn, 24)?;
                     }
+                    24 => {
+                        log::info!("迁移数据库从 v24 到 v25（providers 协议化 + 全局单激活）");
+                        Self::migrate_v24_to_v25(conn)?;
+                        Self::set_user_version(conn, 25)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -671,6 +706,418 @@ impl Database {
                 Err(e)
             }
         }
+    }
+
+    /// v24 → v25：providers 收敛为 `id` 主键 + `protocol` + 全局单激活；
+    /// `proxy_config` 由 app_type 四行重建为按入口协议四行（② 取值零变化）。
+    /// 旧 providers 整表留作 `providers_legacy`，改名/合并明细写进 `migration_report`。
+    /// 整个函数跑在外层 SAVEPOINT 里，任一步失败整段回滚到 v24。
+    fn migrate_v24_to_v25(conn: &Connection) -> Result<(), AppError> {
+        // 历史迁移的单元测试只建自己关心的表；没有 providers 就跳过整段。
+        if !Self::table_exists(conn, "providers")? {
+            return Self::finalize_v25(conn);
+        }
+        // 新装库 / 内存库：create_tables 已经是 v25 结构，只做收尾。
+        if Self::has_column(conn, "providers", "protocol")? {
+            return Self::finalize_v25(conn);
+        }
+
+        // ---- 1. 备份旧表 ----
+        conn.execute("DROP TABLE IF EXISTS providers_legacy", [])
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        conn.execute("CREATE TABLE providers_legacy AS SELECT * FROM providers", [])
+            .map_err(|e| AppError::Database(e.to_string()))?;
+
+        // ---- 2. 读旧行并逐行推断协议 ----
+        struct OldRow {
+            id: String,
+            new_id: String,
+            app_type: String,
+            name: String,
+            settings_config: String,
+            website_url: Option<String>,
+            category: Option<String>,
+            created_at: Option<i64>,
+            sort_index: Option<i64>,
+            notes: Option<String>,
+            icon: Option<String>,
+            icon_color: Option<String>,
+            meta: String,
+            is_current: bool,
+            in_failover_queue: bool,
+            protocol: String,
+            protocol_source: String,
+            auth_style: String,
+            base_url: String,
+            api_key: Option<String>,
+        }
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, app_type, name, settings_config, website_url, category,
+                        created_at, sort_index, notes, icon, icon_color, meta,
+                        is_current, in_failover_queue
+                 FROM providers ORDER BY app_type, COALESCE(sort_index, 999999), id",
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let mapped = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,
+                    row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?,
+                    row.get(8)?, row.get(9)?, row.get(10)?, row.get(11)?,
+                    row.get(12)?, row.get(13)?,
+                ))
+            })
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let raw: Vec<(
+            String, String, String, String, Option<String>, Option<String>,
+            Option<i64>, Option<i64>, Option<String>, Option<String>, Option<String>,
+            String, bool, bool,
+        )> = mapped
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        drop(stmt);
+
+        let mut rows: Vec<OldRow> = Vec::new();
+        for (
+            id, app_type, name, settings_text, website_url, category, created_at,
+            sort_index, notes, icon, icon_color, meta_text, is_current, in_failover_queue,
+        ) in raw {
+            let settings: serde_json::Value =
+                serde_json::from_str(&settings_text).unwrap_or(serde_json::Value::Null);
+            let meta: crate::provider::ProviderMeta =
+                serde_json::from_str(&meta_text).unwrap_or_default();
+            let mut provider = crate::provider::Provider::with_id(
+                id.clone(), name.clone(), settings.clone(), website_url.clone(),
+            );
+            provider.meta = Some(meta.clone());
+            let app = app_type.parse::<crate::app_config::AppType>().ok();
+            let (protocol, source) = match app {
+                Some(app) => crate::protocol::infer::of_provider(&app, &provider),
+                None => (
+                    crate::protocol::Protocol::Anthropic,
+                    crate::protocol::ProtocolSource::Guessed,
+                ),
+            };
+            let (base_url, api_key) = Self::v25_connection(&settings);
+            rows.push(OldRow {
+                new_id: id.clone(),
+                id,
+                app_type,
+                name,
+                settings_config: settings_text,
+                website_url,
+                category,
+                created_at,
+                sort_index,
+                notes,
+                icon,
+                icon_color,
+                meta: meta_text,
+                is_current,
+                in_failover_queue,
+                protocol: protocol.as_str().to_string(),
+                protocol_source: format!("{:?}", source).to_ascii_lowercase(),
+                auth_style: Self::v25_auth_style(&meta),
+                base_url,
+                api_key,
+            });
+        }
+
+        // ---- 3. id 去重：同 id 同上游合并取证据最强；不同上游加 -2/-3 ----
+        use std::collections::HashMap;
+        let rank = |source: &str| match source {
+            "explicit" => 0,
+            "inferred" => 1,
+            _ => 2,
+        };
+        let mut by_id: HashMap<String, Vec<usize>> = HashMap::new();
+        for (i, row) in rows.iter().enumerate() {
+            by_id.entry(row.id.clone()).or_default().push(i);
+        }
+        let mut keep = vec![true; rows.len()];
+        let mut report: Vec<(String, String, String)> = Vec::new();
+        let mut id_groups: Vec<_> = by_id.into_iter().collect();
+        id_groups.sort_by(|a, b| a.0.cmp(&b.0));
+        for (id, indices) in id_groups {
+            if indices.len() == 1 {
+                continue;
+            }
+            let mut by_conn: HashMap<(String, Option<String>), Vec<usize>> = HashMap::new();
+            for i in indices {
+                by_conn
+                    .entry((rows[i].base_url.clone(), rows[i].api_key.clone()))
+                    .or_default()
+                    .push(i);
+            }
+            let mut groups: Vec<Vec<usize>> = by_conn.into_values().collect();
+            groups.sort_by_key(|g| rows[g[0]].base_url.clone());
+            for (gi, mut group) in groups.into_iter().enumerate() {
+                group.sort_by_key(|&i| (rank(&rows[i].protocol_source), i));
+                let winner = group[0];
+                let new_id = if gi == 0 {
+                    id.clone()
+                } else {
+                    format!("{id}-{}", gi + 1)
+                };
+                rows[winner].new_id = new_id.clone();
+                if group.len() > 1 {
+                    report.push((
+                        id.clone(),
+                        new_id.clone(),
+                        format!("合并 {} 份同上游重复行", group.len()),
+                    ));
+                }
+                if new_id != id {
+                    report.push((
+                        id.clone(),
+                        new_id.clone(),
+                        "同 id 不同上游，改名保留".to_string(),
+                    ));
+                }
+                for i in group {
+                    if i != winner {
+                        keep[i] = false;
+                    }
+                }
+            }
+        }
+
+        // ---- 4. 选全局激活：原 claude 的 is_current=1 优先，否则最靠前一行 ----
+        let active = rows
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| keep[*i])
+            .find(|(_, r)| r.app_type == "claude" && r.is_current)
+            .or_else(|| {
+                rows.iter()
+                    .enumerate()
+                    .filter(|(i, _)| keep[*i])
+                    .find(|(_, r)| r.is_current)
+            })
+            .map(|(_, r)| r.new_id.clone())
+            .or_else(|| {
+                rows.iter()
+                    .enumerate()
+                    .filter(|(i, _)| keep[*i])
+                    .min_by_key(|(_, r)| (r.sort_index.unwrap_or(999999), r.new_id.clone()))
+                    .map(|(_, r)| r.new_id.clone())
+            });
+
+        // ---- 5. 重建 providers ----
+        conn.execute("PRAGMA defer_foreign_keys = ON", [])
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        Self::create_v25_providers_table(conn, "providers_v25")?;
+        let insert_sql = "INSERT INTO providers_v25 (
+            id, app_type, name, settings_config, website_url, category, created_at,
+            sort_index, notes, icon, icon_color, meta, is_current, in_failover_queue,
+            protocol, protocol_source, auth_style, base_url, api_key
+        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)";
+        for (i, row) in rows.iter().enumerate() {
+            if !keep[i] {
+                continue;
+            }
+            let is_active = active.as_deref() == Some(row.new_id.as_str());
+            conn.execute(
+                insert_sql,
+                params![
+                    row.new_id, row.app_type, row.name, row.settings_config,
+                    row.website_url, row.category, row.created_at, row.sort_index,
+                    row.notes, row.icon, row.icon_color, row.meta,
+                    if is_active { 1 } else { 0 },
+                    if row.in_failover_queue { 1 } else { 0 },
+                    row.protocol, row.protocol_source, row.auth_style,
+                    row.base_url, row.api_key,
+                ],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+            if row.new_id != row.id {
+                for table in ["provider_endpoints", "provider_health"] {
+                    if !Self::table_exists(conn, table)? {
+                        continue;
+                    }
+                    conn.execute(
+                        &format!(
+                            "UPDATE {table} SET provider_id = ?1 \
+                             WHERE provider_id = ?2 AND app_type = ?3"
+                        ),
+                        params![row.new_id, row.id, row.app_type],
+                    )
+                    .map_err(|e| AppError::Database(e.to_string()))?;
+                }
+            }
+        }
+        conn.execute("DROP TABLE providers", [])
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        conn.execute("ALTER TABLE providers_v25 RENAME TO providers", [])
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        Self::create_v25_indexes(conn)?;
+
+        // ---- 6. 迁移报告 ----
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS migration_report (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, from_id TEXT NOT NULL,
+                to_id TEXT NOT NULL, reason TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')))",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        for (from, to, reason) in report {
+            conn.execute(
+                "INSERT INTO migration_report (from_id, to_id, reason) VALUES (?1,?2,?3)",
+                params![from, to, reason],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        }
+
+        // ---- 7. proxy_config 与废弃表 ----
+        Self::finalize_v25(conn)
+    }
+
+    /// v25 收尾：重建 proxy_config（若仍是旧结构）并删掉已下线功能的表。
+    fn finalize_v25(conn: &Connection) -> Result<(), AppError> {
+        // 已下线功能的表留到前端一并清理：备份/恢复与并发测试仍会读写它们。
+        Self::rebuild_proxy_config_v25(conn)
+    }
+
+    fn create_v25_providers_table(conn: &Connection, table: &str) -> Result<(), AppError> {
+        conn.execute(
+            &format!(
+                "CREATE TABLE {table} (
+                    id TEXT PRIMARY KEY,
+                    app_type TEXT NOT NULL DEFAULT '',
+                    name TEXT NOT NULL,
+                    settings_config TEXT NOT NULL,
+                    website_url TEXT, category TEXT, created_at INTEGER, sort_index INTEGER,
+                    notes TEXT, icon TEXT, icon_color TEXT,
+                    meta TEXT NOT NULL DEFAULT '{{}}',
+                    is_current BOOLEAN NOT NULL DEFAULT 0,
+                    in_failover_queue BOOLEAN NOT NULL DEFAULT 0,
+                    protocol TEXT NOT NULL DEFAULT 'anthropic'
+                        CHECK (protocol IN ('anthropic','openai_chat','openai_responses','gemini')),
+                    protocol_source TEXT NOT NULL DEFAULT 'guessed'
+                        CHECK (protocol_source IN ('explicit','inferred','guessed')),
+                    auth_style TEXT NOT NULL DEFAULT 'api_key'
+                        CHECK (auth_style IN ('api_key','codex_oauth','xai_oauth','copilot','none')),
+                    base_url TEXT NOT NULL DEFAULT '',
+                    api_key TEXT, default_model TEXT,
+                    cost_multiplier TEXT NOT NULL DEFAULT '1.0',
+                    limit_daily_usd TEXT,
+                    limit_monthly_usd TEXT,
+                    provider_type TEXT
+                )"
+            ),
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    fn create_v25_indexes(conn: &Connection) -> Result<(), AppError> {
+        for sql in [
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_providers_one_active \
+             ON providers(is_current) WHERE is_current = 1",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_providers_id_app ON providers(id, app_type)",
+            "CREATE INDEX IF NOT EXISTS idx_providers_failover \
+             ON providers(app_type, in_failover_queue, sort_index)",
+        ] {
+            conn.execute(sql, [])
+                .map_err(|e| AppError::Database(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// 从 settings_config 里取连接信息，只用于迁移落库，运行期不读这两个字段。
+    pub(crate) fn v25_connection(settings: &serde_json::Value) -> (String, Option<String>) {
+        fn pick(value: &serde_json::Value, paths: &[&[&str]]) -> Option<String> {
+            for path in paths {
+                let mut cur = value;
+                let mut found = true;
+                for key in *path {
+                    match cur.get(key) {
+                        Some(next) => cur = next,
+                        None => {
+                            found = false;
+                            break;
+                        }
+                    }
+                }
+                if found {
+                    if let Some(text) = cur.as_str() {
+                        if !text.trim().is_empty() {
+                            return Some(text.to_string());
+                        }
+                    }
+                }
+            }
+            None
+        }
+        let base_url = pick(
+            settings,
+            &[
+                &["env", "ANTHROPIC_BASE_URL"],
+                &["env", "OPENAI_BASE_URL"],
+                &["env", "GOOGLE_GEMINI_BASE_URL"],
+                &["baseUrl"],
+                &["base_url"],
+                &["options", "baseURL"],
+            ],
+        )
+        .unwrap_or_default();
+        let api_key = pick(
+            settings,
+            &[
+                &["env", "ANTHROPIC_AUTH_TOKEN"],
+                &["env", "OPENAI_API_KEY"],
+                &["env", "GEMINI_API_KEY"],
+                &["apiKey"],
+                &["options", "apiKey"],
+            ],
+        );
+        (base_url, api_key)
+    }
+
+    fn v25_auth_style(meta: &crate::provider::ProviderMeta) -> String {
+        if meta.provider_type.as_deref() == Some("github_copilot") {
+            return "copilot".to_string();
+        }
+        if meta
+            .auth_binding
+            .as_ref()
+            .and_then(|b| b.auth_provider.as_deref())
+            == Some("codex_oauth")
+        {
+            return "codex_oauth".to_string();
+        }
+        "api_key".to_string()
+    }
+
+    /// v25：proxy_config 保留 app_type 主键（历史迁移会重建它），新增 protocol 列
+    /// 标记每行对应的入口协议。四行取值按 ② 映射，行为零变化。
+    fn rebuild_proxy_config_v25(conn: &Connection) -> Result<(), AppError> {
+        if !Self::table_exists(conn, "proxy_config")?
+            || Self::has_column(conn, "proxy_config", "protocol")?
+        {
+            return Ok(());
+        }
+        conn.execute(
+            "ALTER TABLE proxy_config ADD COLUMN protocol TEXT NOT NULL DEFAULT 'anthropic'
+             CHECK (protocol IN ('anthropic','openai_chat','openai_responses','gemini'))",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        conn.execute(
+            "UPDATE proxy_config SET protocol = CASE app_type
+                WHEN 'claude' THEN 'anthropic'
+                WHEN 'codex' THEN 'openai_responses'
+                WHEN 'grokbuild' THEN 'openai_chat'
+                WHEN 'gemini' THEN 'gemini'
+                ELSE 'openai_chat' END",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
     }
 
     /// v0 -> v1 迁移：补齐所有缺失列
@@ -4020,6 +4467,95 @@ mod tests {
         )?;
         assert_eq!(log_default, 1);
 
+        Ok(())
+    }
+
+    /// v25 迁移实测：旧库的两个命名空间收敛成一份供应商，同 id 不同上游改名保留，
+    /// 全局只留一个激活项，proxy_config 四行按 ② 打上入口协议标签。
+    #[test]
+    fn migrate_v24_to_v25_collapses_namespaces_and_tags_protocols() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE providers (
+                id TEXT NOT NULL, app_type TEXT NOT NULL, name TEXT NOT NULL,
+                settings_config TEXT NOT NULL, website_url TEXT, category TEXT,
+                created_at INTEGER, sort_index INTEGER, notes TEXT, icon TEXT, icon_color TEXT,
+                meta TEXT NOT NULL DEFAULT '{}', is_current BOOLEAN NOT NULL DEFAULT 0,
+                in_failover_queue BOOLEAN NOT NULL DEFAULT 0,
+                PRIMARY KEY (id, app_type)
+             );
+             CREATE TABLE proxy_config (
+                app_type TEXT PRIMARY KEY, max_retries INTEGER NOT NULL DEFAULT 3,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
+                listen_port INTEGER NOT NULL DEFAULT 15721,
+                enable_logging INTEGER NOT NULL DEFAULT 1,
+                proxy_enabled INTEGER NOT NULL DEFAULT 0,
+                auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
+                streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
+                streaming_idle_timeout INTEGER NOT NULL DEFAULT 120,
+                non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
+                circuit_failure_threshold INTEGER NOT NULL DEFAULT 4,
+                circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
+                circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60,
+                circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
+                circuit_min_requests INTEGER NOT NULL DEFAULT 10,
+                default_cost_multiplier TEXT NOT NULL DEFAULT '1',
+                pricing_model_source TEXT NOT NULL DEFAULT 'response',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+             );
+             INSERT INTO proxy_config (app_type) VALUES ('claude'),('codex'),('gemini'),('grokbuild');
+             INSERT INTO providers (id, app_type, name, settings_config, is_current, sort_index)
+               VALUES ('p1','claude','Claude Relay','{\"env\":{\"ANTHROPIC_BASE_URL\":\"https://a.test\"}}',1,0),
+                      ('p1','codex','Codex Relay','{\"env\":{\"OPENAI_BASE_URL\":\"https://b.test\"}}',0,1),
+                      ('p2','gemini','Gemini','{}',0,2);
+             PRAGMA user_version = 24;",
+        )?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+
+        assert_eq!(Database::get_user_version(&conn)?, 25);
+        let legacy: i64 =
+            conn.query_row("SELECT COUNT(*) FROM providers_legacy", [], |r| r.get(0))?;
+        assert_eq!(legacy, 3, "旧表整体留档");
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM providers", [], |r| r.get(0))?;
+        assert_eq!(count, 3, "同 id 不同上游改名保留，不是丢弃");
+        let p1: String = conn.query_row(
+            "SELECT protocol FROM providers WHERE id = 'p1'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(p1, "anthropic");
+        let renamed: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM providers WHERE id LIKE 'p1-%'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(renamed, 1);
+        let active: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM providers WHERE is_current = 1",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(active, 1, "全局单激活");
+        let report: i64 =
+            conn.query_row("SELECT COUNT(*) FROM migration_report", [], |r| r.get(0))?;
+        assert!(report >= 1, "改名写进迁移报告");
+        let mut stmt =
+            conn.prepare("SELECT app_type, protocol FROM proxy_config ORDER BY app_type")?;
+        let mapped = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        let mapping: Vec<(String, String)> = mapped.collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+        assert_eq!(
+            mapping,
+            vec![
+                ("claude".to_string(), "anthropic".to_string()),
+                ("codex".to_string(), "openai_responses".to_string()),
+                ("gemini".to_string(), "gemini".to_string()),
+                ("grokbuild".to_string(), "openai_chat".to_string()),
+            ]
+        );
         Ok(())
     }
 

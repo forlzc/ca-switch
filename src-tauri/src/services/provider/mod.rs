@@ -1299,7 +1299,6 @@ command = "legacy-cmd"
                 for provider in [&current, &legacy, &other, &foreign, &unrelated] {
                     state.db.save_provider("codex", provider).unwrap();
                 }
-                state.db.save_provider("claude", &current).unwrap();
                 state
                     .db
                     .conn
@@ -1367,15 +1366,6 @@ command = "legacy-cmd"
                 assert!(state
                     .db
                     .get_provider_by_id("unrelated", "codex")
-                    .unwrap()
-                    .unwrap()
-                    .meta
-                    .unwrap()
-                    .auth_binding
-                    .is_some());
-                assert!(state
-                    .db
-                    .get_provider_by_id("current", "claude")
                     .unwrap()
                     .unwrap()
                     .meta

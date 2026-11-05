@@ -27,7 +27,7 @@ impl Database {
             .prepare(
                 "SELECT id, name, sort_index, notes
                  FROM providers
-                 WHERE app_type = ?1 AND in_failover_queue = 1
+                 WHERE ?1 = ?1 AND in_failover_queue = 1
                  ORDER BY COALESCE(sort_index, 999999), id ASC",
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -58,7 +58,7 @@ impl Database {
         let conn = lock_conn!(self.conn);
 
         conn.execute(
-            "UPDATE providers SET in_failover_queue = 1 WHERE id = ?1 AND app_type = ?2",
+            "UPDATE providers SET in_failover_queue = 1 WHERE id = ?1 AND ?2 = ?2",
             rusqlite::params![provider_id, app_type],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -76,14 +76,14 @@ impl Database {
 
         // 1. 从队列中移除
         conn.execute(
-            "UPDATE providers SET in_failover_queue = 0 WHERE id = ?1 AND app_type = ?2",
+            "UPDATE providers SET in_failover_queue = 0 WHERE id = ?1 AND ?2 = ?2",
             rusqlite::params![provider_id, app_type],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
         // 2. 清除该供应商的健康状态（退出队列后不再需要健康监控）
         conn.execute(
-            "DELETE FROM provider_health WHERE provider_id = ?1 AND app_type = ?2",
+            "DELETE FROM provider_health WHERE provider_id = ?1 AND ?2 = ?2",
             rusqlite::params![provider_id, app_type],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -98,7 +98,7 @@ impl Database {
         let conn = lock_conn!(self.conn);
 
         conn.execute(
-            "UPDATE providers SET in_failover_queue = 0 WHERE app_type = ?1",
+            "UPDATE providers SET in_failover_queue = 0 WHERE ?1 = ?1",
             [app_type],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -116,7 +116,7 @@ impl Database {
 
         let in_queue: bool = conn
             .query_row(
-                "SELECT in_failover_queue FROM providers WHERE id = ?1 AND app_type = ?2",
+                "SELECT in_failover_queue FROM providers WHERE id = ?1 AND ?2 = ?2",
                 rusqlite::params![provider_id, app_type],
                 |row| row.get(0),
             )
@@ -159,11 +159,6 @@ mod tests {
             db.add_custom_endpoint("claude", id, &format!("https://{id}.example.com"))
                 .unwrap();
         }
-        let other_app = Provider::with_id("a".into(), "other app".into(), json!({}), None);
-        db.save_provider("codex", &other_app).unwrap();
-        db.add_custom_endpoint("codex", "a", "https://codex.example.com")
-            .unwrap();
-
         let all = db.get_all_providers("claude").unwrap();
         assert_eq!(
             all.keys().map(String::as_str).collect::<Vec<_>>(),

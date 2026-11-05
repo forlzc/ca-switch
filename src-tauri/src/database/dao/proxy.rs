@@ -10,6 +10,17 @@ use super::super::{lock_conn, Database};
 pub(crate) const PRICING_SOURCE_RESPONSE: &str = "response";
 pub(crate) const PRICING_SOURCE_REQUEST: &str = "request";
 
+/// v25：proxy_config 以入口协议为主键，app_type 仅作兼容查询键。
+fn protocol_for_app(app_type: &str) -> &'static str {
+    match app_type {
+        "claude" => "anthropic",
+        "codex" => "openai_responses",
+        "gemini" => "gemini",
+        "grokbuild" => "openai_chat",
+        _ => "openai_chat",
+    }
+}
+
 fn validate_pricing_source(value: &str) -> Result<&str, AppError> {
     let trimmed = value.trim();
     if trimmed == PRICING_SOURCE_RESPONSE || trimmed == PRICING_SOURCE_REQUEST {
@@ -257,12 +268,13 @@ impl Database {
 
         conn.execute(
             "INSERT OR IGNORE INTO proxy_config (
-                app_type, max_retries,
+                protocol, app_type, max_retries,
                 streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
                 circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
                 circuit_error_rate_threshold, circuit_min_requests
-            ) VALUES (?1, ?2, ?3, ?4, 600, ?5, ?6, ?7, ?8, ?9)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 600, ?6, ?7, ?8, ?9, ?10)",
             rusqlite::params![
+                protocol_for_app(app_type),
                 app_type,
                 retries,
                 fb_timeout,
@@ -289,11 +301,11 @@ impl Database {
         // claude: 更激进的重试和超时配置
         conn.execute(
             "INSERT OR IGNORE INTO proxy_config (
-                app_type, max_retries,
+                protocol, app_type, max_retries,
                 streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
                 circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
                 circuit_error_rate_threshold, circuit_min_requests
-            ) VALUES ('claude', 6, 90, 180, 600, 8, 3, 90, 0.7, 15)",
+            ) VALUES ('anthropic', 'claude', 6, 90, 180, 600, 8, 3, 90, 0.7, 15)",
             [],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -301,11 +313,11 @@ impl Database {
         // codex: 默认配置
         conn.execute(
             "INSERT OR IGNORE INTO proxy_config (
-                app_type, max_retries,
+                protocol, app_type, max_retries,
                 streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
                 circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
                 circuit_error_rate_threshold, circuit_min_requests
-            ) VALUES ('codex', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
+            ) VALUES ('openai_responses', 'codex', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
             [],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -313,11 +325,11 @@ impl Database {
         // gemini: 稍高的重试次数
         conn.execute(
             "INSERT OR IGNORE INTO proxy_config (
-                app_type, max_retries,
+                protocol, app_type, max_retries,
                 streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
                 circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
                 circuit_error_rate_threshold, circuit_min_requests
-            ) VALUES ('gemini', 5, 60, 120, 600, 4, 2, 60, 0.6, 10)",
+            ) VALUES ('gemini', 'gemini', 5, 60, 120, 600, 4, 2, 60, 0.6, 10)",
             [],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -325,11 +337,11 @@ impl Database {
         // grokbuild: Responses protocol, same timeout defaults as Codex.
         conn.execute(
             "INSERT OR IGNORE INTO proxy_config (
-                app_type, max_retries,
+                protocol, app_type, max_retries,
                 streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
                 circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
                 circuit_error_rate_threshold, circuit_min_requests
-            ) VALUES ('grokbuild', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
+            ) VALUES ('openai_chat', 'grokbuild', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
             [],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
