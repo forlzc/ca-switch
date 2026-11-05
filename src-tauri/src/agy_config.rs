@@ -596,10 +596,7 @@ mod integration_tests {
     use super::*;
     use crate::app_config::AppType;
     use crate::database::Database;
-    use crate::mode::{
-        current::{provider_for, Purpose},
-        operation::failpoint,
-    };
+    use crate::mode::operation::failpoint;
     use crate::provider::Provider;
     use crate::services::provider::agy_direct;
     use crate::store::AppState;

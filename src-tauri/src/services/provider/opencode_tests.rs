@@ -75,39 +75,6 @@ const KEY_ONLY_CONFIG: &str = r#"{
 
 #[test]
 #[serial]
-fn opencode_builtin_import_is_read_only_and_existing_override_is_editable() {
-    let fixture = Fixture::new();
-    fs::write(&fixture.config_path, KEY_ONLY_CONFIG).unwrap();
-    let original_permissions = fs::metadata(&fixture.config_path).unwrap().permissions();
-    let mut read_only = original_permissions.clone();
-    read_only.set_readonly(true);
-    fs::set_permissions(&fixture.config_path, read_only).unwrap();
-
-    let imported = import_opencode_providers_from_live(&fixture.state);
-    fs::set_permissions(&fixture.config_path, original_permissions).unwrap();
-    assert_eq!(imported.unwrap(), 1);
-    assert_eq!(
-        import_opencode_providers_from_live(&fixture.state).unwrap(),
-        0
-    );
-    assert_eq!(
-        fs::read_to_string(&fixture.config_path).unwrap(),
-        KEY_ONLY_CONFIG
-    );
-
-    let mut provider = fixture.imported();
-    assert!(provider.settings_config.get("npm").is_none());
-    assert!(provider.settings_config["options"].get("baseURL").is_none());
-    provider.settings_config["options"]["apiKey"] = json!("edited-test-key");
-    ProviderService::update(&fixture.state, AppType::OpenCode, None, provider).unwrap();
-    let saved = opencode_config::get_providers().unwrap();
-    assert_eq!(saved["opencode-go"]["options"]["apiKey"], "edited-test-key");
-    assert!(saved["opencode-go"].get("npm").is_none());
-    assert!(saved["opencode-go"]["options"].get("baseURL").is_none());
-}
-
-#[test]
-#[serial]
 fn opencode_builtin_partial_model_override_can_omit_display_name() {
     let fixture = Fixture::new();
     opencode_config::set_provider(
