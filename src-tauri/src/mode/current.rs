@@ -94,10 +94,13 @@ mod tests {
     use std::path::Path;
 
     /// 直接读直连指针的地方：定义处、这里，以及只关心直连指针的写入路径。
+    /// `services/provider/mod.rs` 是新单激活指针的唯一读口（`active_provider`），
+    /// 代理与界面都经它取当前供应商，允许在读口内部直接读。
     const ALLOWED: &[&str] = &[
         "settings.rs",
         "database/dao/providers.rs",
         "mode/current.rs",
+        "services/provider/mod.rs",
     ];
 
     fn scan(dir: &Path, root: &Path, hits: &mut Vec<String>) {

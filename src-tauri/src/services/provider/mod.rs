@@ -4285,13 +4285,21 @@ impl ProviderService {
         if app_type.is_additive_mode() {
             return Ok(String::new());
         }
-        // 代理模式下界面上的「当前」是代理路由到的那家。
-        crate::mode::current::provider_for(
-            &state.db,
-            &app_type,
-            crate::mode::current::Purpose::InUse,
-        )
-        .map(|opt| opt.unwrap_or_default())
+        // 只有一份激活指针：界面上的「当前」、代理实际出站的那家都是它。
+        Self::active_provider(&state.db, &app_type).map(|opt| {
+            opt.map(|provider| provider.id).unwrap_or_default()
+        })
+    }
+
+    /// 当前激活的那一行。切换只改这一份指针，代理与界面都从这里取。
+    pub fn active_provider(
+        db: &crate::database::Database,
+        app_type: &AppType,
+    ) -> Result<Option<Provider>, AppError> {
+        match crate::settings::get_effective_current_provider(db, app_type)? {
+            Some(id) => db.get_provider_by_id(&id, app_type.as_str()),
+            None => Ok(None),
+        }
     }
 
     fn save_native_provider(

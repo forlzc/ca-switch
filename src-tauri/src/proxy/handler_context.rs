@@ -158,7 +158,7 @@ impl RequestContext {
             session_result.client_provided
         );
 
-        let current_provider = crate::mode::current::provider_in_use(&state.db, &app_type)
+        let current_provider = crate::services::ProviderService::active_provider(&state.db, &app_type)
             .ok()
             .flatten();
         let current_provider_id = current_provider

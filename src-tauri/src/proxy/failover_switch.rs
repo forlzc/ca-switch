@@ -75,14 +75,9 @@ impl FailoverSwitchManager {
         provider_id: &str,
         provider_name: &str,
     ) -> Result<bool, AppError> {
-        // 只有处于代理模式的应用才允许执行故障转移切换
         let Ok(app_enum) = app_type.parse::<crate::app_config::AppType>() else {
             return Ok(false);
         };
-        if !crate::mode::current::is_proxy(&app_enum) {
-            log::debug!("[Failover] {app_type} 不在路由模式，跳过切换");
-            return Ok(false);
-        }
 
         log::info!("[FO-001] 切换: {app_type} → {provider_name}");
 
@@ -90,18 +85,24 @@ impl FailoverSwitchManager {
 
         if let Some(app) = app_handle {
             if let Some(app_state) = app.try_state::<crate::store::AppState>() {
-                // 只换代理的路由，不写客户端文件。
-                switched = crate::mode::controller::record_failover_route(
-                    app_state.inner(),
-                    &app_enum,
-                    provider_id,
-                )
-                .await
-                .map_err(AppError::Message)?;
-
-                if !switched {
+                let state = app_state.inner();
+                // 只有一份激活指针：故障转移成功就是把这一家设为激活，下一次请求直接用它。
+                let active = crate::services::ProviderService::active_provider(&state.db, &app_enum)?;
+                if active.as_ref().map(|provider| provider.id.as_str()) == Some(provider_id) {
                     return Ok(false);
                 }
+                let Some(target) = state
+                    .db
+                    .get_provider_by_id(provider_id, app_enum.as_str())?
+                else {
+                    log::warn!("[Failover] 目标供应商 {provider_id} 不在库里，忽略");
+                    return Ok(false);
+                };
+
+                crate::settings::set_current_provider(&app_enum, Some(provider_id))?;
+                state.db.set_current_provider(app_enum.as_str(), provider_id)?;
+                state.proxy_service.set_active_target(&app_enum, &target).await;
+                switched = true;
 
                 // Linux 重建原生菜单，其它平台通知托盘面板（不挂原生菜单）
                 crate::tray::refresh_tray_menu(app);

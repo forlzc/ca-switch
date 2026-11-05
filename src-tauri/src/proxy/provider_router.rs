@@ -43,9 +43,9 @@ impl ProviderRouter {
     /// - 故障转移关闭时：仅返回当前供应商
     /// - 故障转移开启时：仅使用故障转移队列，按队列顺序依次尝试（P1 → P2 → ...）
     pub async fn select_providers(&self, app_type: &str) -> Result<Vec<Provider>, AppError> {
-        // 代理模式下路由到代理路由那家，和直连指针无关。
+        // 只有一份激活指针：代理路由就是直连指针。
         let current_provider = AppType::from_str(app_type).ok().and_then(|app_enum| {
-            crate::mode::current::provider_in_use(&self.db, &app_enum)
+            crate::services::ProviderService::active_provider(&self.db, &app_enum)
                 .ok()
                 .flatten()
         });
