@@ -67,20 +67,19 @@ mod tests {
     use super::*;
     #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     use crate::claude_desktop_config::PROFILE_ID;
-    use crate::config::{get_claude_settings_path, read_json_file, write_json_file};
+    
     use crate::database::Database;
     use crate::provider::{
-        AuthBinding, AuthBindingSource, ClaudeModelConfig, ProviderMeta, UniversalProvider,
+        AuthBinding, AuthBindingSource, ProviderMeta, UniversalProvider,
         UsageScript,
     };
-    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
-    use crate::provider::{ClaudeDesktopMode, ClaudeDesktopModelRoute};
-    use crate::proxy::types::ProxyConfig;
+    
+    
     use crate::store::AppState;
     use serde_json::json;
     use serial_test::serial;
     use std::env;
-    use std::fs;
+    
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex, OnceLock};
     use tempfile::TempDir;

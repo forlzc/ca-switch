@@ -98,13 +98,6 @@ pub(crate) fn key_resume_target(
     Ok(None)
 }
 
-/// 启动时调用：撤掉 #8268 测试版装的包装脚本、`env` 文件和 shell PATH 片段，让直接敲
-/// `agy` 回到官方登录。caswitch 不再改客户端的 `settings.json`，模型和 `modelProvider`
-/// 都原样保留。没有旧现场时什么都不做。
-pub(crate) fn migrate_legacy_launcher() -> Result<(), AppError> {
-    agy_config::remove_legacy_launcher().map(|_| ())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

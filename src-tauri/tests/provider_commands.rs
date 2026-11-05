@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use ca_switch_lib::{
     get_codex_auth_path, get_codex_config_path, read_json_file, switch_provider_test_hook,
-    write_codex_live_atomic, AppError, AppType, MultiAppConfig, Provider, ProviderService,
+    write_codex_live_atomic, AppError, AppType, MultiAppConfig, Provider,
 };
 
 #[path = "support.rs"]

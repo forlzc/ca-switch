@@ -3,12 +3,7 @@ use std::sync::{mpsc, Arc};
 use std::task::Context;
 use std::time::Duration;
 
-use tauri::Manager;
-
 use crate::database::Database;
-use crate::provider::Provider;
-use crate::services::model_pricing::ModelPricingInfo;
-use crate::store::AppState;
 
 pub(super) struct TestHome {
     previous: Option<std::ffi::OsString>,

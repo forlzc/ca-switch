@@ -40,8 +40,12 @@ use crate::error::AppError;
 use store::{CredentialStore, Slot};
 
 pub use files::backup_dir;
+#[cfg(test)]
 pub use recover::recover;
-pub use state::{confirm, load_state, update_state, Journal, State, Step};
+#[cfg(test)]
+pub use state::confirm;
+pub use state::{load_state, update_state, Journal, State, Step};
+#[cfg(test)]
 pub use switch::{check_out, replace_live, vacate};
 
 #[cfg(test)]

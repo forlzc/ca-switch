@@ -1,5 +1,5 @@
 use std::time::Duration;
-use tauri::{AppHandle, State};
+use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::hermes_config;

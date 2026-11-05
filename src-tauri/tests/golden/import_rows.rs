@@ -6,7 +6,7 @@
 use ca_switch_lib::{import_provider_from_deeplink, parse_deeplink_url, AppType};
 
 use crate::support::{create_test_state, reset_test_fs, test_mutex};
-use crate::util::{assert_golden, dump_provider_rows, write_home_file};
+use crate::util::{assert_golden, dump_provider_rows};
 
 /// 深链生成的 id 是「名称-毫秒时间戳」，快照里换成固定写法。
 fn stable_deeplink_id(id: &str) -> String {

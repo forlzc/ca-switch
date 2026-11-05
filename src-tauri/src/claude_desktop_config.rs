@@ -9,13 +9,9 @@ use crate::config::read_json_file;
 use crate::database::Database;
 use crate::database::CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID;
 use crate::error::AppError;
-use crate::floor;
-use crate::patch::json::{self as patch_json, ClearScope, JsonPatch};
-use crate::patch::{KeyPath, LivePatch, LiveWriteError};
 use crate::provider::{ClaudeDesktopMode, Provider};
 
 pub const PROFILE_ID: &str = "00000000-0000-4000-8000-000000157210";
-pub const PROFILE_NAME: &str = "CC Switch";
 
 #[cfg(any(target_os = "macos", windows, target_os = "linux", test))]
 const CONFIG_FILE: &str = "claude_desktop_config.json";
@@ -24,8 +20,6 @@ const CONFIG_LIBRARY_DIR: &str = "configLibrary";
 const GATEWAY_TOKEN_SETTING_KEY: &str = "claude_desktop_gateway_token";
 const CLAUDE_DESKTOP_PROXY_PREFIX: &str = "/claude-desktop";
 pub const DEFAULT_CREATED_AT: &str = "2024-01-01T00:00:00Z";
-/// `inferenceModels` 的上限（Desktop 的 schema 写着 `maxItems: 200`）。
-const MAX_INFERENCE_MODELS: usize = 200;
 const MIMO_REDACTED_THINKING_PLACEHOLDER: &str = "[redacted thinking]";
 const MIMO_TOOL_CALL_THINKING_PLACEHOLDER: &str = "tool call";
 
@@ -84,7 +78,6 @@ pub const DEFAULT_PROXY_ROUTES: &[ClaudeDesktopDefaultRoute] = &[
 #[derive(Debug, Clone)]
 struct ClaudeDesktopPaths {
     normal_config_path: PathBuf,
-    threep_config_path: PathBuf,
     config_library_path: PathBuf,
     profile_path: PathBuf,
     meta_path: PathBuf,
@@ -278,24 +271,6 @@ pub fn is_claude_safe_model_id(model: &str) -> bool {
                 .strip_prefix(prefix)
                 .is_some_and(|rest| !rest.is_empty())
         })
-}
-
-fn inference_model_json(spec: &InferenceModelSpec) -> Value {
-    if spec.supports_1m || spec.label_override.is_some() {
-        let mut item = json!({ "name": spec.name });
-        if let Some(label_override) = spec.label_override.as_deref() {
-            item["labelOverride"] = json!(label_override);
-        }
-        if spec.supports_1m {
-            item["supports1m"] = json!(true);
-            // 只有 `supports1m` 时 Desktop 每个模型列两行（原名 + 「1M context window」）。
-            // 加上 `prefer1m`（1.21459.0 起）只列原名，交给内嵌 CLI 时自动补 `[1m]`。
-            item["prefer1m"] = json!(true);
-        }
-        item
-    } else {
-        Value::String(spec.name.clone())
-    }
 }
 
 pub fn get_or_create_gateway_token(db: &Database) -> Result<String, AppError> {
@@ -1080,50 +1055,6 @@ pub fn proxy_gateway_base_url_from_db(db: &Database) -> Result<String, AppError>
     ))
 }
 
-/// 直连那家的网关 profile：地址和 Key 直接写进去。模型映射卡、托管 OAuth 要经路由，拒绝。
-fn direct_profile(provider: &Provider) -> Result<Value, AppError> {
-    validate_direct_provider(provider)?;
-    let credentials = direct_gateway_credentials(provider)?;
-    let model_specs = direct_inference_model_specs(provider)?;
-    Ok(build_gateway_profile(
-        &credentials.base_url,
-        &credentials.api_key,
-        (!model_specs.is_empty()).then_some(model_specs.as_slice()),
-    ))
-}
-
-/// 本地路由的 `/claude-desktop` 入口。`proxy_url` 是路由服务的地址（不带路径）。
-pub fn gateway_base_url(proxy_url: &str) -> String {
-    format!(
-        "{}{}",
-        proxy_url.trim_end_matches('/'),
-        CLAUDE_DESKTOP_PROXY_PREFIX
-    )
-}
-
-
-fn build_gateway_profile(
-    base_url: &str,
-    api_key: &str,
-    model_specs: Option<&[InferenceModelSpec]>,
-) -> Value {
-    let mut profile = json!({
-        "coworkEgressAllowedHosts": ["*"],
-        "disableDeploymentModeChooser": true,
-        "inferenceGatewayApiKey": api_key,
-        "inferenceGatewayAuthScheme": "bearer",
-        "inferenceGatewayBaseUrl": base_url,
-        "inferenceProvider": "gateway"
-    });
-
-    if let Some(model_specs) = model_specs {
-        profile["inferenceModels"] =
-            Value::Array(model_specs.iter().map(inference_model_json).collect());
-    }
-
-    profile
-}
-
 fn read_json_or_empty(path: &Path) -> Result<Value, AppError> {
     let value = if path.exists() {
         read_json_file(path)?
@@ -1302,7 +1233,6 @@ fn paths_from_dirs(normal_dir: PathBuf, threep_dir: PathBuf) -> ClaudeDesktopPat
 
     ClaudeDesktopPaths {
         normal_config_path: normal_dir.join(CONFIG_FILE),
-        threep_config_path: threep_dir.join(CONFIG_FILE),
         config_library_path,
         profile_path,
         meta_path,

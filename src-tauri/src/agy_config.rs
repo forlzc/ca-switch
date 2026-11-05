@@ -139,12 +139,6 @@ fn non_empty(value: Option<String>) -> Option<String> {
     value.filter(|s| !s.trim().is_empty())
 }
 
-/// 配置里是否带有值得导入的真实内容（Key、端点或模型）。
-pub(crate) fn has_managed_content(settings: &Value) -> bool {
-    let projection = AgyProjection::of(settings);
-    projection.api_key.is_some() || projection.base_url.is_some() || projection.model.is_some()
-}
-
 /// 私有目录里 `settings.json` 的补丁：Key 模式加上卡上的模型。
 fn key_profile_patch(projection: &AgyProjection) -> JsonPatch {
     let mut patch = JsonPatch::default();
@@ -416,45 +410,13 @@ fn login_shell_agy() -> Option<PathBuf> {
     path.is_absolute().then_some(path)
 }
 
-/// 撤掉 #8268 测试版装的启动器：`bin/agy` 包装脚本、带 Key 的 `env` 文件和各 shell
-/// 启动文件里的 PATH 片段。只动带标记的内容。返回是否清掉过 `env`（说明当时可能写过
-/// `modelProvider`，调用方要按新规则重写一次 settings.json）。
-pub(crate) fn remove_legacy_launcher() -> Result<bool, AppError> {
-    legacy::remove(&agy_dir(), &get_home_dir())
-}
-
 mod legacy {
     use super::*;
 
     pub(super) const WRAPPER_MARK: &str = "cc-switch-agy-wrapper";
-    pub(super) const PATH_MARK: &str = "cc-switch agy wrapper";
-
-    pub(super) fn remove(agy_dir: &Path, home: &Path) -> Result<bool, AppError> {
-        let bin_dir = agy_dir.join("bin");
-        let wrapper = bin_dir.join("agy");
-        if wrapper.is_file() && is_wrapper(&wrapper) {
-            fs::remove_file(&wrapper).map_err(|e| AppError::io(&wrapper, e))?;
-        }
-        // 目录为空才会删除；里面有别的东西时保持原样。
-        let _ = fs::remove_dir(&bin_dir);
-        let env = agy_dir.join("env");
-        let had_env = is_marked_env(&env);
-        if had_env {
-            fs::remove_file(&env).map_err(|e| AppError::io(&env, e))?;
-        }
-        let block = path_entry_block(&bin_dir);
-        for profile in shell_profiles(home) {
-            remove_path_entry(&profile, &block)?;
-        }
-        Ok(had_env)
-    }
 
     pub(super) fn is_wrapper(path: &Path) -> bool {
         head_contains(path, WRAPPER_MARK)
-    }
-
-    fn is_marked_env(path: &Path) -> bool {
-        path.is_file() && head_contains(path, &format!("# {PATH_MARK}"))
     }
 
     fn head_contains(path: &Path, mark: &str) -> bool {
@@ -464,51 +426,6 @@ mod legacy {
             .and_then(|mut file| file.read(&mut prefix))
             .map(|len| String::from_utf8_lossy(&prefix[..len]).contains(mark))
             .unwrap_or(false)
-    }
-
-    /// 可能被写入过 PATH 片段的所有 shell 配置文件。
-    fn shell_profiles(home: &Path) -> Vec<PathBuf> {
-        [
-            ".zshenv",
-            ".zprofile",
-            ".zshrc",
-            ".zlogin",
-            ".bashrc",
-            ".bash_profile",
-            ".bash_login",
-            ".profile",
-        ]
-        .into_iter()
-        .map(|name| home.join(name))
-        .collect()
-    }
-
-    pub(super) fn path_entry_block(bin_dir: &Path) -> String {
-        format!(
-            "\n# {PATH_MARK}\nexport PATH={}:\"$PATH\"\n",
-            shell_quote(&bin_dir.to_string_lossy())
-        )
-    }
-
-    /// 只删我们那个目录对应的整块，其余字节不动；只剩这块的文件当初是我们建的，整个删掉。
-    fn remove_path_entry(profile: &Path, block: &str) -> Result<(), AppError> {
-        if !profile.is_file() {
-            return Ok(());
-        }
-        let existing = fs::read_to_string(profile).map_err(|e| AppError::io(profile, e))?;
-        if !existing.contains(block) {
-            return Ok(());
-        }
-        let next = existing.replace(block, "");
-        if next.is_empty() {
-            fs::remove_file(profile).map_err(|e| AppError::io(profile, e))
-        } else {
-            write_text_file(profile, &next)
-        }
-    }
-
-    fn shell_quote(value: &str) -> String {
-        format!("'{}'", value.replace('\'', r"'\''"))
     }
 }
 
@@ -570,10 +487,10 @@ mod integration_tests {
     use crate::database::Database;
     use crate::provider::Provider;
     use crate::services::provider::agy_direct;
-    use crate::store::AppState;
+    
     use serial_test::serial;
     use std::os::unix::fs::PermissionsExt;
-    use std::sync::Arc;
+    
 
     struct HomeGuard(tempfile::TempDir, Option<std::ffi::OsString>);
     impl HomeGuard {
@@ -616,19 +533,6 @@ mod integration_tests {
 
     fn read_json(path: &Path) -> Value {
         serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
-    }
-
-    fn walk(dir: &Path) -> Vec<PathBuf> {
-        let mut out = Vec::new();
-        for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
-            let path = entry.path();
-            if path.is_dir() && !path.is_symlink() {
-                out.extend(walk(&path));
-            } else if path.is_file() {
-                out.push(path);
-            }
-        }
-        out
     }
 
 
@@ -692,45 +596,6 @@ mod integration_tests {
         assert!(doc.get("model").is_none());
     }
 
-    #[test]
-    #[serial]
-    fn key_profile_sessions_are_listed_and_resume_with_their_provider() {
-        let _home = HomeGuard::new();
-        let db = Database::memory().unwrap();
-        let row = relay("relay one");
-        db.save_provider("agy", &row).unwrap();
-        let launch = prepare_launch(&row.id, &row.settings_config).unwrap();
-        let dir = launch.gemini_dir.unwrap();
-        let logs = dir.join("antigravity-cli/brain/abc-123/.system_generated/logs");
-        fs::create_dir_all(&logs).unwrap();
-        fs::write(
-            logs.join("transcript_full.jsonl"),
-            r#"{"step_index":0,"type":"USER_INPUT","content":"hi"}"#,
-        )
-        .unwrap();
-
-        let sessions = crate::session_manager::providers::agy::scan_sessions();
-        assert_eq!(sessions.len(), 1);
-        let command = sessions[0].resume_command.clone().unwrap();
-        assert!(!command.contains("fixture"), "{command}");
-        assert_eq!(command, resume_command(Some(&dir), "abc-123"));
-        let (found, id) = agy_direct::key_resume_target(&db, &command)
-            .unwrap()
-            .unwrap();
-        assert_eq!(found.id, "relay one");
-        assert_eq!(id, "abc-123");
-        // Login sessions and tampered ids are left to the plain command.
-        assert!(
-            agy_direct::key_resume_target(&db, "agy --conversation=abc-123")
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            agy_direct::key_resume_target(&db, &format!("{command}; rm -rf /"))
-                .unwrap()
-                .is_none()
-        );
-    }
 
     #[test]
     #[serial]
@@ -747,79 +612,6 @@ mod integration_tests {
         assert!(launch.env.is_empty());
         assert!(!key_profiles_root().exists());
         assert!(!settings_path().exists());
-    }
-
-    /// 造一份 #8268 测试版留下的现场。
-    fn legacy_install(home: &Path) -> PathBuf {
-        let bin = agy_dir().join("bin");
-        fs::create_dir_all(&bin).unwrap();
-        fs::write(
-            bin.join("agy"),
-            format!("#!/bin/sh\n# {}\nexec agy \"$@\"\n", legacy::WRAPPER_MARK),
-        )
-        .unwrap();
-        fs::write(
-            agy_dir().join("env"),
-            format!("# {}\nGEMINI_API_KEY='fixture'\n", legacy::PATH_MARK),
-        )
-        .unwrap();
-        let block = legacy::path_entry_block(&bin);
-        fs::write(
-            home.join(".zshenv"),
-            format!("# user\nexport KEEP=1\n{block}"),
-        )
-        .unwrap();
-        fs::write(home.join(".zshrc"), &block).unwrap();
-        fs::write(
-            home.join(".profile"),
-            format!("# user without newline{block}"),
-        )
-        .unwrap();
-        bin
-    }
-
-    #[test]
-    #[serial]
-    fn legacy_launcher_cleanup_removes_only_marked_content() {
-        let home = HomeGuard::new();
-        let bin = legacy_install(home.path());
-        assert!(remove_legacy_launcher().unwrap());
-        assert!(!bin.exists());
-        assert!(!agy_dir().join("env").exists());
-        assert_eq!(
-            fs::read_to_string(home.path().join(".zshenv")).unwrap(),
-            "# user\nexport KEEP=1\n"
-        );
-        assert!(!home.path().join(".zshrc").exists(), "file we created");
-        assert_eq!(
-            fs::read_to_string(home.path().join(".profile")).unwrap(),
-            "# user without newline"
-        );
-        // Idempotent.
-        assert!(!remove_legacy_launcher().unwrap());
-    }
-
-    #[test]
-    #[serial]
-    fn legacy_cleanup_never_touches_unmanaged_files() {
-        let home = HomeGuard::new();
-        let bin = agy_dir().join("bin");
-        fs::create_dir_all(&bin).unwrap();
-        fs::write(bin.join("agy"), "#!/bin/sh\necho user script\n").unwrap();
-        fs::write(agy_dir().join("env"), "GEMINI_API_KEY=mine\n").unwrap();
-        let foreign = format!(
-            "export PATH=\"$HOME/x:$PATH\"\n# my own note about {}\n\n# {}\nexport PATH='/some/other/bin':\"$PATH\"\n",
-            legacy::PATH_MARK,
-            legacy::PATH_MARK
-        );
-        fs::write(home.path().join(".zshenv"), &foreign).unwrap();
-        assert!(!remove_legacy_launcher().unwrap());
-        assert!(bin.join("agy").exists());
-        assert!(agy_dir().join("env").exists());
-        assert_eq!(
-            fs::read_to_string(home.path().join(".zshenv")).unwrap(),
-            foreign
-        );
     }
 
     fn fake_agy(dir: &Path) -> PathBuf {

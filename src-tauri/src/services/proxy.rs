@@ -8,7 +8,7 @@ use crate::provider::Provider;
 use crate::proxy::server::ProxyServer;
 use crate::proxy::switch_lock::SwitchLockManager;
 use crate::proxy::types::*;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::sync::Arc;
 use tauri::Emitter;
 use tokio::sync::RwLock;
