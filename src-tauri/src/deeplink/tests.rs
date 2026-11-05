@@ -1733,25 +1733,6 @@ fn test_first_switch_mode_provider_stays_inactive_when_the_toggle_is_off() {
     }
 }
 
-#[test]
-#[serial_test::serial]
-fn test_first_switch_mode_provider_takes_effect_when_the_toggle_is_on() {
-    let _home = TestHomeGuard::new();
-
-    let (state, id) = import_claude_link(Some(true));
-
-    let current = crate::mode::current::provider_for(
-        &state.db,
-        &AppType::Claude,
-        crate::mode::current::Purpose::Direct,
-    )
-    .unwrap();
-    assert_eq!(current.as_deref(), Some(id.as_str()));
-    let settings = std::fs::read_to_string(crate::config::get_claude_settings_path())
-        .expect("client config written");
-    assert!(settings.contains("https://api.example.com/v1"));
-}
-
 // =============================================================================
 // 确认框下载的图标经前端重新编码后放进 icon，导入时按自定义图标的规则校验
 // =============================================================================

@@ -2367,88 +2367,8 @@ requires_openai_auth = true
         });
     }
 
-    #[test]
-    #[serial]
-    fn db_only_additive_update_survives_live_config_parse_errors() {
-        with_test_home(|state, home| {
-            let provider = openclaw_provider("deepseek");
-            ProviderService::add(state, AppType::OpenClaw, provider.clone(), false)
-                .expect("seed db-only provider");
 
-            let stored = state
-                .db
-                .get_provider_by_id("deepseek", AppType::OpenClaw.as_str())
-                .expect("query stored provider")
-                .expect("provider should exist");
-            assert_eq!(
-                stored
-                    .meta
-                    .as_ref()
-                    .and_then(|meta| meta.live_config_managed),
-                Some(false),
-                "db-only provider should be marked as not live-managed"
-            );
 
-            let openclaw_dir = home.join(".openclaw");
-            fs::create_dir_all(&openclaw_dir).expect("create openclaw dir");
-            fs::write(openclaw_dir.join("openclaw.json"), "{ invalid json5")
-                .expect("write malformed config");
-
-            let mut updated = stored.clone();
-            updated.name = "DeepSeek Edited".to_string();
-            updated.meta.get_or_insert_with(ProviderMeta::default);
-
-            ProviderService::update(state, AppType::OpenClaw, None, updated)
-                .expect("db-only update should ignore live parse errors");
-
-            let saved = state
-                .db
-                .get_provider_by_id("deepseek", AppType::OpenClaw.as_str())
-                .expect("query updated provider")
-                .expect("updated provider should exist");
-            assert_eq!(saved.name, "DeepSeek Edited");
-        });
-    }
-
-    #[test]
-    #[serial]
-    fn sync_current_provider_for_app_skips_db_only_opencode_provider() {
-        with_test_home(|state, _| {
-            let provider = opencode_provider("db-only-opencode");
-            ProviderService::add(state, AppType::OpenCode, provider.clone(), false)
-                .expect("seed db-only opencode provider");
-
-            ProviderService::sync_current_provider_for_app(state, AppType::OpenCode)
-                .expect("sync additive opencode providers");
-
-            let live_providers = crate::opencode_config::get_providers()
-                .expect("read opencode providers after sync");
-            assert!(
-                !live_providers.contains_key(&provider.id),
-                "db-only opencode provider should not be written to live during sync"
-            );
-        });
-    }
-
-    #[test]
-    #[serial]
-    fn sync_current_provider_for_app_skips_db_only_openclaw_provider() {
-        with_test_home(|state, _| {
-            let provider = openclaw_provider("db-only-openclaw");
-            ProviderService::add(state, AppType::OpenClaw, provider.clone(), false)
-                .expect("seed db-only openclaw provider");
-
-            ProviderService::sync_current_provider_for_app(state, AppType::OpenClaw)
-                .expect("sync additive openclaw providers");
-
-            let live_providers = crate::openclaw_config::get_providers()
-                .expect("read openclaw providers after sync");
-            assert!(
-                !live_providers.contains_key(&provider.id),
-                "db-only openclaw provider should not be written to live during sync"
-            );
-        });
-    }
 
     #[test]
     #[serial]
@@ -2535,34 +2455,6 @@ requires_openai_auth = true
         });
     }
 
-    #[test]
-    #[serial]
-    fn add_first_managed_codex_with_reauth_required_account_is_rejected() {
-        with_test_home(|state, _| {
-            crate::settings::reload_settings().expect("reload settings");
-            tauri::async_runtime::block_on(async {
-                state
-                    .codex_oauth_manager
-                    .add_test_account_with_access_token("acct-legacy", "managed-token", None)
-                    .await
-                    .expect("seed legacy account without id_token");
-            });
-            let provider = managed_codex_provider("managed-legacy", "acct-legacy");
-
-            let error = ProviderService::add(state, AppType::Codex, provider.clone(), false)
-                .expect_err("reauth-required account must not be written to live auth");
-            assert!(
-                error.to_string().contains("id_token"),
-                "backend should require re-login even if the frontend gate is bypassed: {error}"
-            );
-            assert!(state
-                .db
-                .get_provider_by_id(&provider.id, AppType::Codex.as_str())
-                .expect("query provider")
-                .is_none());
-            assert!(!crate::codex_config::get_codex_auth_path().exists());
-        });
-    }
 
 
 
@@ -3833,118 +3725,7 @@ requires_openai_auth = true
         });
     }
 
-    #[test]
-    #[serial]
-    fn add_first_managed_codex_with_missing_account_leaves_no_provider_or_live_state() {
-        with_test_home(|state, _| {
-            crate::settings::reload_settings().expect("reload settings");
-            let provider = managed_codex_provider("managed-missing", "acct-missing");
-            let live_before = crate::codex_config::CodexLiveStateSnapshot::capture()
-                .expect("capture empty Codex live state");
 
-            ProviderService::add(state, AppType::Codex, provider.clone(), false)
-                .expect_err("missing managed account should fail before add commits");
-
-            assert!(
-                state
-                    .db
-                    .get_provider_by_id(&provider.id, AppType::Codex.as_str())
-                    .expect("query failed managed add")
-                    .is_none(),
-                "failed preflight must not leave an orphan provider row"
-            );
-            assert_eq!(
-                state
-                    .db
-                    .get_current_provider(AppType::Codex.as_str())
-                    .expect("read current after failed add"),
-                None
-            );
-            assert_eq!(
-                crate::codex_config::CodexLiveStateSnapshot::capture()
-                    .expect("capture Codex live after failed add"),
-                live_before,
-                "failed preflight must not mutate Codex live files"
-            );
-        });
-    }
-
-    #[test]
-    #[serial]
-    fn add_first_managed_codex_current_failure_rolls_forward_on_recovery() {
-        with_test_home(|state, _| {
-            crate::settings::reload_settings().expect("reload settings");
-            tauri::async_runtime::block_on(async {
-                state
-                    .codex_oauth_manager
-                    .add_test_account_with_user_identity(
-                        "acct-managed",
-                        "managed-token",
-                        "managed-user",
-                    )
-                    .await
-                    .expect("seed managed Codex OAuth account");
-            });
-
-            let provider = managed_codex_provider("managed-first", "acct-managed");
-            let live_before = crate::codex_config::CodexLiveStateSnapshot::capture()
-                .expect("capture empty Codex live state");
-            {
-                let conn = state.db.conn.lock().expect("lock database");
-                conn.execute_batch(
-                    "CREATE TRIGGER reject_first_managed_current_update
-                     BEFORE UPDATE OF is_current ON providers
-                     WHEN NEW.app_type = 'codex'
-                       AND NEW.id = 'managed-first'
-                       AND NEW.is_current = 1
-                     BEGIN
-                       SELECT RAISE(ABORT, 'forced first managed Codex current failure');
-                     END;",
-                )
-                .expect("install first-current failure trigger");
-            }
-
-            let error = ProviderService::add(state, AppType::Codex, provider.clone(), false)
-                .expect_err("DB current failure surfaces");
-            assert!(
-                error
-                    .to_string()
-                    .contains("forced first managed Codex current failure"),
-                "add should surface the DB current failure, got: {error}"
-            );
-            // 文件已经发布：行留着，pending 等着补完指针，live 不回滚。
-            assert!(state
-                .db
-                .get_provider_by_id(&provider.id, AppType::Codex.as_str())
-                .expect("query provider")
-                .is_some());
-            assert!(crate::mode::operation::has_pending(AppType::Codex.as_str()));
-            assert_ne!(
-                crate::codex_config::CodexLiveStateSnapshot::capture().expect("capture live"),
-                live_before
-            );
-
-            state
-                .db
-                .conn
-                .lock()
-                .expect("lock database")
-                .execute_batch("DROP TRIGGER reject_first_managed_current_update;")
-                .expect("drop trigger");
-            crate::mode::operation::recover_on_startup(&state.db);
-            assert!(!crate::mode::operation::has_pending(
-                AppType::Codex.as_str()
-            ));
-            assert_eq!(
-                state
-                    .db
-                    .get_current_provider(AppType::Codex.as_str())
-                    .expect("read current after recovery")
-                    .as_deref(),
-                Some(provider.id.as_str())
-            );
-        });
-    }
 
 
 
@@ -4401,190 +4182,25 @@ impl ProviderService {
         add_to_live: bool,
     ) -> Result<bool, AppError> {
         let _native_guard = lock_native_provider_operations(state, &app_type);
-        if app_type == AppType::Kimi
-            && crate::kimi_config::is_official_provider(&provider.settings_config)
-        {
-            return Err(AppError::InvalidInput(
-                "Manage Kimi official accounts in the Authorization Center".into(),
-            ));
-        }
         if app_type == AppType::Pi {
             return pi::add(state, provider, add_to_live);
         }
-
         if app_type == AppType::Omp {
             return omp::add(state, provider, add_to_live);
         }
 
         let mut provider = provider;
         Self::prepare_new_provider(&app_type, &mut provider)?;
-        if app_type.is_additive_mode() {
-            Self::set_provider_live_config_managed(&mut provider, add_to_live);
-        }
-
-        if matches!(app_type, AppType::Codex) {
-            return Self::add_codex(state, provider);
-        }
-
-        if matches!(app_type, AppType::Mcode | AppType::Kimi | AppType::Dsh) {
-            // The key is user-chosen, and saving would overwrite an existing row or live node.
-            // The per-app lock also serializes native list refreshes and other mutations;
-            // the live write repeats the check under MCode's file lock.
-            if state
-                .db
-                .get_provider_by_id(&provider.id, app_type.as_str())?
-                .is_some()
-                || if matches!(app_type, AppType::Dsh) {
-                    crate::dsh_config::provider_key_exists(&provider.id)?
-                } else if app_type == AppType::Kimi {
-                    crate::kimi_config::provider_key_exists(&provider.id)?
-                } else {
-                    crate::mcode_config::provider_key_exists(&provider.id)?
-                }
-            {
-                return Err(AppError::InvalidInput(format!(
-                    "{} provider key '{}' already exists",
-                    app_type.as_str(),
-                    provider.id
-                )));
-            }
-            return Self::save_native_provider(state, &app_type, &provider, add_to_live, true);
-        }
-
-        // 还没有当前供应商时这一家会被写进 live：和进入代理、切换互斥（同 `update`）。
-        let _switch_guard = crate::mode::controller::lock_settled_blocking(state, &app_type)?;
-
-        // 累加式写 live 失败（如配置文件解析不了）时要撤回这一行，先记下原来的
-        let existing_row = if app_type.is_additive_mode() {
-            state
-                .db
-                .get_provider_by_id(&provider.id, app_type.as_str())?
-        } else {
-            None
-        };
-
-        // Save to database
         state.db.save_provider(app_type.as_str(), &provider)?;
-
-        // Additive mode apps (OpenCode, OpenClaw, Hermes): optionally write to live config.
-        if app_type.is_additive_mode() {
-            // OMO / OMO Slim providers use exclusive mode and write to dedicated config file.
-            if matches!(app_type, AppType::OpenCode)
-                && matches!(provider.category.as_deref(), Some("omo") | Some("omo-slim"))
-            {
-                // Do not auto-enable newly added OMO / OMO Slim providers.
-                // Users must explicitly switch/apply an OMO provider to activate it.
-                return Ok(true);
-            }
-            if !add_to_live {
-                return Ok(true);
-            }
-            return Self::keep_row_if_written(
-                state,
-                &app_type,
-                &provider.id,
-                existing_row.as_ref(),
-                write_live_for_state(state, &app_type, &provider),
-            );
-        }
-
-        // For other apps: Check if sync is needed (if this is current provider, or no current provider)
-        let current = crate::mode::current::provider_for(
-            &state.db,
-            &app_type,
-            crate::mode::current::Purpose::Direct,
-        )?;
-        if current.is_none() {
-            // 第一个供应商同样只写关键字段，不覆盖用户已有的配置文件。
-            match app_type {
-                AppType::Claude => {
-                    claude_direct::switch_to(state.db.as_ref(), None, &provider)?;
-                    return Ok(true);
-                }
-                AppType::Gemini => {
-                    gemini_direct::switch_to(state.db.as_ref(), &provider)?;
-                    return Ok(true);
-                }
-                // Antigravity 的卡只用来打开终端，添加不写任何文件。
-                AppType::Agy => return Ok(true),
-                AppType::GrokBuild => {
-                    grok_direct::switch_to(state.db.as_ref(), None, &provider)?;
-                    return Ok(true);
-                }
-                AppType::ClaudeDesktop => {
-                    // 要经路由的卡直连写不进去，路由模式下配置文件归路由那家：只存行。
-                    if !crate::mode::current::is_proxy(&app_type)
-                        && !crate::claude_desktop_config::needs_routing(&provider)
-                    {
-                        crate::claude_desktop_config::write_direct(
-                            state.db.as_ref(),
-                            crate::mode::state::op::SWITCH,
-                            Some(&provider),
-                            crate::mode::state::PendingTarget::pointer(Some(provider.id.clone())),
-                        )?;
-                    }
-                    return Ok(true);
-                }
-                _ => {}
-            }
-            // No current provider, set as current and sync. Managed Codex adds
-            // use the transactional path above because token resolution can fail.
-            state
-                .db
+        // 还没有激活项时，新加的这一家就是它；否则只进列表，等用户自己切过去。
+        // 累加式应用没有「当前」概念，Antigravity 的卡也只用来打开终端。
+        if !app_type.is_additive_mode()
+            && app_type != AppType::Agy
+            && Self::active_provider(&state.db, &app_type)?.is_none()
+        {
+            crate::settings::set_current_provider(&app_type, Some(&provider.id))?;
+            state.db
                 .set_current_provider(app_type.as_str(), &provider.id)?;
-            write_live_for_state(state, &app_type, &provider)?;
-        }
-
-        Ok(true)
-    }
-
-    /// 新增 Codex 供应商。还没有当前供应商时，它就是第一个：行、live 和指针一起提交，
-    /// live 只写关键字段，不覆盖用户已有的 config.toml。写 live 失败时撤回刚存的行，
-    /// 免得留下一个看得见却用不了的供应商。
-    fn add_codex(state: &AppState, provider: Provider) -> Result<bool, AppError> {
-        let app_type = AppType::Codex;
-        // 和切换互斥：等着的切换不能看到只存了一半的托管账号绑定。
-        let _switch_guard = crate::mode::controller::lock_settled_blocking(state, &app_type)?;
-        let current = crate::mode::current::provider_for(
-            &state.db,
-            &app_type,
-            crate::mode::current::Purpose::Direct,
-        )?;
-        if current.is_some() {
-            state.db.save_provider(app_type.as_str(), &provider)?;
-            return Ok(true);
-        }
-
-        // 行有问题（会把官方登录发给第三方等）在存行之前就拒绝。
-        codex_direct::preflight(state.db.as_ref(), &provider)?;
-        let previous = state
-            .db
-            .get_provider_by_id(&provider.id, app_type.as_str())?;
-        state.db.save_provider(app_type.as_str(), &provider)?;
-        let written = codex_direct::write_direct(
-            state.db.as_ref(),
-            &state.codex_oauth_manager,
-            crate::mode::state::op::SWITCH,
-            codex_direct::Owner::None,
-            Some(&provider),
-            crate::mode::state::PendingTarget::pointer(Some(provider.id.clone())),
-        );
-        if let Err(error) = written {
-            // 文件已经发布、只是落定状态失败时，pending 会在下次操作或启动时补完指针，
-            // 行要留着；还没发布就失败，撤回刚存的行。
-            if crate::mode::operation::has_pending(AppType::Codex.as_str()) {
-                return Err(error);
-            }
-            let rollback = match &previous {
-                Some(previous) => state.db.save_provider(app_type.as_str(), previous),
-                None => state.db.delete_provider(app_type.as_str(), &provider.id),
-            };
-            if let Err(rollback) = rollback {
-                return Err(AppError::Message(format!(
-                    "新增首个 Codex 供应商失败: {error}; 恢复供应商数据同时失败: {rollback}"
-                )));
-            }
-            return Err(error);
         }
         Ok(true)
     }

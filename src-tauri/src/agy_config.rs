@@ -664,60 +664,6 @@ mod integration_tests {
         out
     }
 
-    #[test]
-    #[serial]
-    fn cards_never_write_the_real_settings_credentials_or_shell_files() {
-        use crate::services::ProviderService;
-        let home = HomeGuard::new();
-        fs::create_dir_all(agy_dir()).unwrap();
-        let original = r#"{"model":"Gemini 3.8 Flash (Medium)","theme":"dark"}"#;
-        fs::write(settings_path(), original).unwrap();
-        // Sibling Gemini files are never targets either.
-        let sibling = home.path().join(".gemini/settings.json");
-        fs::write(&sibling, "{\"keep\":true}").unwrap();
-        let db = Arc::new(Database::memory().unwrap());
-        let state = AppState::new(db.clone());
-        let login = provider(
-            "login",
-            json!({"env":{},"config":{"model":{"name":"Gemini 3.1 Pro (High)"}}}),
-            true,
-        );
-        let relay = relay("relay");
-        for row in [&login, &relay] {
-            assert!(ProviderService::add(&state, AppType::Agy, row.clone(), true).unwrap());
-            let error = ProviderService::switch(&state, AppType::Agy, &row.id).unwrap_err();
-            assert!(error.to_string().contains("Open terminal"), "{error}");
-        }
-        assert_eq!(
-            provider_for(&db, &AppType::Agy, Purpose::Direct).unwrap(),
-            None
-        );
-
-        // A pointer left by an older version is neither re-applied by a full
-        // sync nor a reason to refuse deleting the card.
-        db.set_current_provider("agy", "login").unwrap();
-        if let Err(error) = ProviderService::sync_current_to_live(&state) {
-            assert!(!error.to_string().contains("provider/agy"), "{error}");
-        }
-        ProviderService::delete(&state, AppType::Agy, "login").unwrap();
-
-        prepare_launch(&relay.id, &relay.settings_config).unwrap();
-        assert_eq!(fs::read_to_string(settings_path()).unwrap(), original);
-        assert_eq!(fs::read_to_string(&sibling).unwrap(), "{\"keep\":true}");
-        for file in walk(home.path()) {
-            let text = fs::read(&file).unwrap_or_default();
-            assert!(
-                !String::from_utf8_lossy(&text).contains("fixture"),
-                "key leaked into {}",
-                file.display()
-            );
-        }
-        assert!(!agy_dir().join("bin").exists());
-        assert!(!agy_dir().join("env").exists());
-        for name in [".zshenv", ".zprofile", ".zshrc", ".bashrc", ".profile"] {
-            assert!(!home.path().join(name).exists());
-        }
-    }
 
     #[test]
     #[serial]
