@@ -544,7 +544,7 @@ pub fn run() {
             app_store::refresh_app_config_dir_override(app.handle());
             panic_hook::init_app_config_dir(crate::config::get_app_config_dir());
 
-            // 初始化日志（输出到 <app_config_dir>/logs/cc-switch.log）
+            // 初始化日志（输出到 <app_config_dir>/logs/ca-switch.log）
             {
                 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
 

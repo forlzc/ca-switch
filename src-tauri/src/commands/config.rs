@@ -138,11 +138,11 @@ pub async fn open_app_config_folder(handle: AppHandle) -> Result<bool, String> {
     Ok(true)
 }
 
-/// 在文件管理器中定位应用诊断日志 cc-switch.log；文件还没生成时打开日志目录
+/// 在文件管理器中定位应用诊断日志 ca-switch.log；文件还没生成时打开日志目录
 #[tauri::command]
 pub async fn reveal_app_log_file() -> Result<bool, String> {
     let log_dir = crate::panic_hook::get_log_dir();
-    let log_file = log_dir.join("cc-switch.log");
+    let log_file = log_dir.join("ca-switch.log");
 
     let target = if log_file.exists() {
         log_file
