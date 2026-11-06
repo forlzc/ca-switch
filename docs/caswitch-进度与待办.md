@@ -19,7 +19,8 @@ MCP/Skills 槽位均已删除。13 个其他 app 的配置模块与命令已清�
 > 原 §6.2 的「前端四入口」方案已被最终口径取代：只保留一个 API 入口，协议由供应商侧 `apiFormat` 下拉选择。
 > 详见 §11。
 >
-> 2026-11-06 追加：协议矩阵补齐（Chat×Anthropic）与真实上游验证，详见 §12；该轮改动尚在工作区，未提交。
+> 2026-11-06 追加：协议矩阵补齐（Chat×Anthropic）与真实上游验证，详见 §12；该轮改动已提交推送。
+> 同日追加：断流修复、模型覆盖、配置随协议切换、UA 预设与模型刷新，并发布 v4.0.25，详见 §13。
 
 ---
 
@@ -38,6 +39,11 @@ MCP/Skills 槽位均已删除。13 个其他 app 的配置模块与命令已清�
 | `cb693617` | 2e-3c | 编辑 / 删除只操作库，激活项不可删 |
 | `3d1096f2` | 2e-3 + 2d | 移除 `live/`、`mode/` 与客户端配置管理面（84 文件 / −30977 行） |
 | `851f7c58` | 2b-2 | schema v25：协议化 + 全局单激活迁移 |
+| `b6b5d195` | 2c | 补齐 Chat×Anthropic 转换与协议矩阵真实验证 |
+| `09835778` | 构建 | 修复 Windows 目标无法编译 |
+| `ad576f56` | 修复 | Chat×Responses 长推理断流心跳、UA 预设、模型列表刷新 |
+| `a684854a` | 修复 | 配置变量随上游协议切换、Anthropic 入口模型覆盖、用量删「应用」列 |
+| `2ea72fce` | 发布 | 仓库更名为 ca-switch，同步代码内链接，重发 v4.0.25 |
 
 **安全网**
 
@@ -215,13 +221,13 @@ cargo test --lib --offline database::backup -- --test-threads=1
 | 5 张已下线表 | v25 未删 | **已闭环**：schema v28 迁移 DROP，见 §11 |
 | 前端构建 | 已通过 `typecheck` + `build:renderer` | 已闭环 |
 | 命名口径 | 已确认统一为 `ca-switch`（分支 / 包 / crate / 目录 / identifier） | 已闭环 |
-| 远程分支策略 | 已推送 `origin/ca-switch` @ `609f0d9c`（14 个提交）；`origin/fork/build` 未改动 | 见下方「推送记录」 |
+| 远程分支策略 | `origin/ca-switch` → `2ea72fce`（当前 HEAD，工作区干净）；`origin/fork/build` 未改动 | 已闭环 |
 
 ### 推送记录（2026-11-05，已完成）
 
 **结果**：`origin/ca-switch` 已创建并指向 `609f0d9c`，本地 `origin/ca-switch` 已同步，
 工作区干净、待推送提交数为 0；`origin/fork/build` 全程未改动。共推送 14 个提交
-（P1 → 2b-2 的 11 个 + 3 个文档提交）。
+（P1 → 2b-2 的 11 个 + 3 个文档提交）。此后又推送 20 个提交至 `2ea72fce`（见 §13）。
 
 排查中踩过的坑，留作凭据配置参考：
 
@@ -388,7 +394,7 @@ cd .. && pnpm build          # 2f 时
 | 项 | 结果 |
 |---|---|
 | `cargo +1.94.1 check` | **0 error / 0 warning** |
-| `cargo +1.94.1 test --lib` | **1654 passed / 0 failed / 6 ignored**（2026-11-06 更新，含新增协议验证用例） |
+| `cargo +1.94.1 test --lib` | **1658 passed / 0 failed / 7 ignored**（2026-11-06 最新，含心跳与协议验证用例） |
 | `cargo +1.94.1 test --tests` | **3 passed / 0 failed** |
 | `pnpm typecheck` | **通过** |
 | `pnpm vitest run` | **120 文件 / 787 用例通过** |
@@ -466,6 +472,40 @@ git tag -a caswitch-base bc4c4c45 -m "caswitch 重构前基线（fork/build 合�
 
 ### 12.6 状态
 
-本轮改动落在 7 个代码文件（新增 `transform_chat_anthropic.rs`）加本进度文档，尚未提交；
-本地 `ca-switch` 领先 `origin/ca-switch` 13 个提交，均未推送。
+本轮改动已全部提交并推送：`b6b5d195`（协议矩阵）→ `09835778`（Windows 构建）→ `ad576f56`、`a684854a`（修复）→
+`2ea72fce`（更名与链接同步）。远端 `origin/ca-switch` 与本地一致，均指向 `2ea72fce`；
+`v4.0.25` tag 指向同一提交并已发布，详见 §13。
+
+---
+
+## 13. 最新修复与 v4.0.25 发布（2026-11-06）
+
+### 13.1 本轮修复
+
+| 问题 | 修法 | 提交 |
+|---|---|---|
+| Chat×Responses 长推理静默被判断流（`Response stream ended without a finish reason`） | 转换流改 `tokio::select!`，静默 15s 补空 delta 心跳；新增暂停时钟单测 | `ad576f56` |
+| Anthropic 入口模型名被透传，客户端选项未替换为配置模型 | 转发前用供应商配置的上游模型覆盖请求体 `model`，按协议读 `ANTHROPIC_MODEL` / `OPENAI_MODEL` / `GEMINI_MODEL`，空值不覆盖 | `a684854a` |
+| 配置 JSON 固定 Anthropic 字段，与「上游格式」无关 | 新增 `claudeApiFormatConfig.ts`；表单地址 / Key / 模型按协议读写，切协议时自动迁移旧键；后端 Base URL 提取同步 | `a684854a` |
+| 上游格式文案仍写「原生 / 需转换」 | 改为纯协议名，5 个语言包同步 | `a684854a` |
+| 用量统计「应用」列恒为 Anthropic | 删除列、详情行与映射，默认列 10 → 9 | `a684854a` |
+| UA 预设下拉与模型列表刷新回归 | 恢复分组预设（含 Claude Code 2.1.318 / Codex 0.167.0 / Kilo-Code 7.8.27）；获取按钮常驻可重复刷新 | `ad576f56` |
+| 仓库更名后代码内链接仍旧指向 `cc-switch` | README、关于页、更新端点、深链、Cargo 元数据、文档统一改为 `ca-switch`；便携包资产名补 `v` | `2ea72fce` |
+
+### 13.2 发布
+
+- 版本 `4.0.25`，tag `v4.0.25` → `2ea72fce`，Release 由该提交重新构建并发布：
+  https://github.com/forlzc/ca-switch/releases/tag/v4.0.25
+- 资产：`CA.Switch_4.0.25_x64_en-US.msi`（12,599,296）、
+  `CC-Switch-v4.0.25-Windows-Portable.zip`（12,366,805）、`CA.Switch_4.0.25_amd64.deb`（12,857,090）
+- Windows 由 GitHub Actions `windows-2022` 原生构建；Linux deb 为本机构建，均关闭 updater 产物（无签名私钥）。
+- 旧 `fork-v1/2/3` Release 与 tag 已清理；本地 `caswitch-base` 基线 tag 保留。
+- 仓库已由 `cc-switch` 更名为 `ca-switch`，旧地址由 GitHub 自动重定向；本地 `origin` 已更新。
+
+### 13.3 已知未决
+
+- `response.failed` / SSE `error` 仍不补 `finish_reason` 与 `[DONE]`，客户端会把上游真实原因显示为
+  「没有 finish reason」；建议后续改为错误分块 + 终止分块。
+- 首包前（未收到 `response.created`）的静默仍无心跳，超长 TTFT 上游仍可能触发超时。
+- `Gemini` 两格真实上游验证仍缺 Key（`Anthropic→Gemini`、`Gemini→Gemini`）。
 
