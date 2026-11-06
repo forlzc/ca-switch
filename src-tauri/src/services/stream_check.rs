@@ -26,9 +26,6 @@ use crate::error::AppError;
 use crate::provider::Provider;
 use crate::proxy::providers::get_adapter;
 
-/// Google Gemini 默认端点（agy 未配置自定义端点时使用）。
-const DEFAULT_GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com";
-
 /// 健康状态枚举
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]

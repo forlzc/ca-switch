@@ -99,6 +99,7 @@ fn own_compaction_summary(item: &Value) -> Option<String> {
 }
 
 /// 看不出来源的压缩条目：别家签发的密文，或没有载荷的标记。
+#[cfg(test)]
 pub(crate) fn is_unrecognized_compaction_item(item: &Value) -> bool {
     is_compaction_item(item) && own_compaction_summary(item).is_none()
 }

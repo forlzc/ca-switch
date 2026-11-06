@@ -19,9 +19,11 @@
 
 use super::error::ProxyError;
 use super::providers::codex_compaction::{
-    compaction_item_replay_text, is_compaction_item, is_unrecognized_compaction_item,
-    strip_mismatched_item_id, user_message_item,
+    compaction_item_replay_text, is_compaction_item, strip_mismatched_item_id, user_message_item,
 };
+#[cfg(test)]
+use super::providers::codex_compaction::is_unrecognized_compaction_item;
+#[cfg(test)]
 use super::types::RectifierConfig;
 use serde_json::{json, Value};
 
@@ -72,6 +74,7 @@ pub struct OpaqueStateRectifyResult {
 /// 上游是不是因为验不了请求里的密文而拒绝。受整流器总开关管辖。
 ///
 /// `codex_third_party`：Codex 原样转发给非官方的原生 Responses 上游。
+#[cfg(test)]
 pub fn detect_opaque_state_rejection(
     error: &ProxyError,
     config: &RectifierConfig,

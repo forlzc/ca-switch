@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::fs;
 use std::io::Write;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use crate::error::AppError;
 
@@ -32,7 +32,7 @@ pub fn get_home_dir() -> PathBuf {
 
 /// 检测路径是否为 WSL 网络路径（如 \\wsl$\Ubuntu\... 或 \\wsl.localhost\Ubuntu\...）
 /// 注意：仅检测直接 UNC 路径，映射磁盘符（如 Z: -> \\wsl$\...）无法检测
-#[cfg(windows)]
+#[cfg(all(test, windows))]
 pub(crate) fn is_wsl_path(path: &Path) -> bool {
     use std::path::Prefix;
     if let Some(Component::Prefix(prefix)) = path.components().next() {
@@ -48,7 +48,7 @@ pub(crate) fn is_wsl_path(path: &Path) -> bool {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(all(test, not(windows)))]
 pub(crate) fn is_wsl_path(_path: &Path) -> bool {
     false
 }
@@ -94,203 +94,6 @@ pub fn get_claude_config_dir() -> PathBuf {
     }
 
     get_home_dir().join(".claude")
-}
-
-/// 默认 Claude MCP 配置文件路径 (~/.claude.json)
-pub fn get_default_claude_mcp_path() -> PathBuf {
-    get_home_dir().join(".claude.json")
-}
-
-fn normalize_path_lexically(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !normalized.pop() {
-                    normalized.push(component.as_os_str());
-                }
-            }
-            Component::Normal(part) => normalized.push(part),
-            Component::RootDir | Component::Prefix(_) => normalized.push(component.as_os_str()),
-        }
-    }
-
-    normalized
-}
-
-fn comparable_path_key(path: &Path) -> String {
-    let mut key = normalize_path_lexically(path).to_string_lossy().to_string();
-
-    #[cfg(windows)]
-    {
-        key = key.replace('\\', "/");
-    }
-
-    while key.len() > 1 && key.ends_with('/') {
-        key.pop();
-    }
-
-    #[cfg(windows)]
-    {
-        key.make_ascii_lowercase();
-    }
-
-    key
-}
-
-fn path_eq_lexical(left: &Path, right: &Path) -> bool {
-    comparable_path_key(left) == comparable_path_key(right)
-}
-
-/// Returns true when `path` is lexically contained within `base`.
-///
-/// Both paths are normalized lexically (without hitting the filesystem), so
-/// this works for non-existent paths. It is **not** a symlink defense: a
-/// symlink inside `base` can still lead a resolved path outside it. Callers
-/// that go on to open the file must canonicalize the existing path and
-/// re-verify containment (see `resolve_cc_switch_catalog_path`).
-/// On Windows the comparison is case-insensitive.
-pub(crate) fn path_is_within(base: &Path, path: &Path) -> bool {
-    let base_key = comparable_path_key(base);
-    let path_key = comparable_path_key(path);
-
-    if path_key == base_key {
-        return true;
-    }
-
-    let prefix = format!("{base_key}/");
-    path_key.starts_with(&prefix)
-}
-
-#[cfg(windows)]
-fn derive_wsl_default_mcp_path(dir: &Path) -> Option<PathBuf> {
-    use std::path::Prefix;
-
-    let normalized = normalize_path_lexically(dir);
-    let mut components = normalized.components();
-    let prefix = match components.next()? {
-        Component::Prefix(prefix) => prefix,
-        _ => return None,
-    };
-
-    let server = match prefix.kind() {
-        Prefix::UNC(server, _) | Prefix::VerbatimUNC(server, _) => server.to_string_lossy(),
-        _ => return None,
-    };
-
-    if !server.eq_ignore_ascii_case("wsl$") && !server.eq_ignore_ascii_case("wsl.localhost") {
-        return None;
-    }
-
-    let mut parts = Vec::new();
-    for component in components {
-        match component {
-            Component::RootDir | Component::CurDir => {}
-            Component::Normal(part) => parts.push(part.to_string_lossy().to_string()),
-            Component::ParentDir | Component::Prefix(_) => return None,
-        }
-    }
-
-    let is_wsl_home_default =
-        parts.len() == 3 && parts[0] == "home" && !parts[1].is_empty() && parts[2] == ".claude";
-    let is_wsl_root_default = parts.len() == 2 && parts[0] == "root" && parts[1] == ".claude";
-
-    if is_wsl_home_default || is_wsl_root_default {
-        return normalized
-            .parent()
-            .map(|parent| parent.join(".claude.json"));
-    }
-
-    None
-}
-
-/// Derive the WSL-side home directory from a WSL UNC path inside a user's
-/// home: `\\wsl$\<distro>\home\<user>\...` -> `\\wsl$\<distro>\home\<user>`,
-/// and `\\wsl.localhost\<distro>\root\...` -> `\\wsl.localhost\<distro>\root`.
-/// Returns None for non-WSL paths and for WSL paths outside a home directory
-/// (e.g. `\\wsl$\<distro>\etc`), where no home can be derived safely.
-#[cfg(windows)]
-pub(crate) fn derive_wsl_home_dir(dir: &Path) -> Option<PathBuf> {
-    use std::path::Prefix;
-
-    let normalized = normalize_path_lexically(dir);
-    let mut components = normalized.components();
-    let prefix = match components.next()? {
-        Component::Prefix(prefix) => prefix,
-        _ => return None,
-    };
-
-    let server = match prefix.kind() {
-        Prefix::UNC(server, _) | Prefix::VerbatimUNC(server, _) => server.to_string_lossy(),
-        _ => return None,
-    };
-
-    if !server.eq_ignore_ascii_case("wsl$") && !server.eq_ignore_ascii_case("wsl.localhost") {
-        return None;
-    }
-
-    let mut parts = Vec::new();
-    for component in components {
-        match component {
-            Component::RootDir | Component::CurDir => {}
-            Component::Normal(part) => parts.push(part.to_string_lossy().to_string()),
-            Component::ParentDir | Component::Prefix(_) => return None,
-        }
-    }
-
-    let home_len = match parts.as_slice() {
-        [home, user, ..] if home == "home" && !user.is_empty() => 2,
-        [root, ..] if root == "root" => 1,
-        _ => return None,
-    };
-
-    // Rebuild prefix + root + the first `home_len` components.
-    let mut home_dir = PathBuf::new();
-    let mut normal_seen = 0usize;
-    for component in normalized.components() {
-        match component {
-            Component::Prefix(_) | Component::RootDir => home_dir.push(component.as_os_str()),
-            Component::Normal(_) if normal_seen < home_len => {
-                home_dir.push(component.as_os_str());
-                normal_seen += 1;
-            }
-            _ => break,
-        }
-    }
-    Some(home_dir)
-}
-
-fn default_mcp_path_for_config_dir(dir: &Path) -> Option<PathBuf> {
-    let default_config_dir = get_home_dir().join(".claude");
-    if path_eq_lexical(dir, &default_config_dir) {
-        return Some(get_default_claude_mcp_path());
-    }
-
-    #[cfg(windows)]
-    {
-        if let Some(path) = derive_wsl_default_mcp_path(dir) {
-            return Some(path);
-        }
-    }
-
-    None
-}
-
-fn derive_mcp_path_from_override(dir: &Path) -> PathBuf {
-    dir.join(".claude.json")
-}
-
-/// 获取 Claude MCP 配置文件路径
-pub fn get_claude_mcp_path() -> PathBuf {
-    if let Some(custom_dir) = crate::settings::get_claude_override_dir() {
-        if let Some(path) = default_mcp_path_for_config_dir(&custom_dir) {
-            return path;
-        }
-        return derive_mcp_path_from_override(&custom_dir);
-    }
-    get_default_claude_mcp_path()
 }
 
 /// 获取 Claude Code 主配置文件路径
@@ -483,12 +286,6 @@ pub fn write_json_file<T: Serialize>(path: &Path, data: &T) -> Result<(), AppErr
     write_json_file_with_contents(path, data).map(|_| ())
 }
 
-/// 同 [`write_json_file`]，用于含凭据的 live 文件（Codex `auth.json`、Claude Code
-/// `settings.json`）：Unix 下新文件和替换文件都是 0600。普通写入新建文件时按 umask
-/// 落成 0644，Key 就对同机其他用户可读。
-pub fn write_json_file_private<T: Serialize>(path: &Path, data: &T) -> Result<(), AppError> {
-    atomic_write_private(path, &sorted_json_bytes(data)?)
-}
 
 /// 原子写入文本文件（用于 TOML/纯文本）
 pub fn write_text_file(path: &Path, data: &str) -> Result<(), AppError> {
@@ -498,11 +295,6 @@ pub fn write_text_file(path: &Path, data: &str) -> Result<(), AppError> {
     atomic_write(path, data.as_bytes())
 }
 
-/// 同 [`write_text_file`]，用于含凭据的 live 文件（Codex / Grok Build 的
-/// `config.toml`，第三方 Key 就写在里面）：Unix 下 0600。
-pub fn write_text_file_private(path: &Path, data: &str) -> Result<(), AppError> {
-    atomic_write_private(path, data.as_bytes())
-}
 
 /// 原子写入：写入临时文件后 rename 替换，避免半写状态
 pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
@@ -531,10 +323,6 @@ pub struct StagedWrite {
 }
 
 impl StagedWrite {
-    pub fn tmp_path(&self) -> &Path {
-        &self.tmp
-    }
-
     /// 用临时文件替换目标（失败时删掉临时文件）。
     pub fn commit(self) -> Result<(), AppError> {
         commit_staged(&self.tmp, &self.path).inspect_err(|_| {
@@ -779,23 +567,6 @@ mod tests {
         assert_atomic_write_replaces_existing_file(dir.path());
     }
 
-    #[test]
-    fn a_failed_replace_keeps_the_staged_file_for_recovery() {
-        let dir = tempfile::tempdir().unwrap();
-        // 目标是个非空目录：替换一定失败。
-        let path = dir.path().join("target");
-        std::fs::create_dir(&path).unwrap();
-        std::fs::write(path.join("occupied"), b"x").unwrap();
-        let staged = stage_write(&path, b"new contents", Some(0o600), false).unwrap();
-        let tmp = staged.tmp_path().to_path_buf();
-
-        assert!(commit_staged(&tmp, &path).is_err());
-        assert_eq!(std::fs::read(&tmp).unwrap(), b"new contents");
-
-        // 一次性的原子写不留临时文件。
-        assert!(staged.commit().is_err());
-        assert!(!tmp.exists());
-    }
 
     #[cfg(windows)]
     #[test]
@@ -853,107 +624,6 @@ mod tests {
         assert_atomic_write_replaces_existing_file(dir.path());
     }
 
-    #[test]
-    fn derive_mcp_path_from_override_uses_config_dir_for_custom_path() {
-        let override_dir = PathBuf::from("/tmp/profile/.claude");
-        let derived = derive_mcp_path_from_override(&override_dir);
-        assert_eq!(derived, PathBuf::from("/tmp/profile/.claude/.claude.json"));
-    }
-
-    #[test]
-    fn derive_mcp_path_from_override_uses_config_dir_for_non_hidden_folder() {
-        let override_dir = PathBuf::from("/data/claude-config");
-        let derived = derive_mcp_path_from_override(&override_dir);
-        assert_eq!(derived, PathBuf::from("/data/claude-config/.claude.json"));
-    }
-
-    #[test]
-    fn derive_mcp_path_from_override_supports_relative_rootless_dir() {
-        let override_dir = PathBuf::from("claude");
-        let derived = derive_mcp_path_from_override(&override_dir);
-        assert_eq!(derived, PathBuf::from("claude/.claude.json"));
-    }
-
-    #[test]
-    fn derive_mcp_path_from_root_like_dir_uses_root_file() {
-        let override_dir = PathBuf::from("/");
-        let derived = derive_mcp_path_from_override(&override_dir);
-        assert_eq!(derived, PathBuf::from("/.claude.json"));
-    }
-
-    #[test]
-    fn derive_mcp_path_from_override_preserves_leading_parent_dirs() {
-        let override_dir = PathBuf::from("../../profiles/work/.claude");
-        let derived = derive_mcp_path_from_override(&override_dir);
-        assert_eq!(derived, override_dir.join(".claude.json"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn wsl_unc_home_default_uses_split_mcp_path() {
-        let override_dir = PathBuf::from(r"\\wsl$\Ubuntu\home\travis\.claude");
-        let derived = default_mcp_path_for_config_dir(&override_dir)
-            .expect("WSL home default should use split MCP path");
-        assert_eq!(
-            derived,
-            PathBuf::from(r"\\wsl$\Ubuntu\home\travis\.claude.json")
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn wsl_unc_root_default_uses_split_mcp_path() {
-        let override_dir = PathBuf::from(r"\\wsl.localhost\Ubuntu\root\.claude");
-        let derived = default_mcp_path_for_config_dir(&override_dir)
-            .expect("WSL root default should use split MCP path");
-        assert_eq!(
-            derived,
-            PathBuf::from(r"\\wsl.localhost\Ubuntu\root\.claude.json")
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn derive_wsl_home_dir_from_opencode_config_dir() {
-        let dir = PathBuf::from(r"\\wsl.localhost\Ubuntu-26.04\home\travis\.config\opencode");
-        let home = derive_wsl_home_dir(&dir).expect("WSL home should be derived");
-        assert_eq!(
-            home,
-            PathBuf::from(r"\\wsl.localhost\Ubuntu-26.04\home\travis")
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn derive_wsl_home_dir_supports_wsl_dollar_and_root() {
-        let dir = PathBuf::from(r"\\wsl$\Ubuntu\root\.config\opencode");
-        let home = derive_wsl_home_dir(&dir).expect("WSL root home should be derived");
-        assert_eq!(home, PathBuf::from(r"\\wsl$\Ubuntu\root"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn derive_wsl_home_dir_rejects_non_home_and_non_wsl_paths() {
-        assert_eq!(
-            derive_wsl_home_dir(&PathBuf::from(r"\\wsl$\Ubuntu\etc\opencode")),
-            None
-        );
-        assert_eq!(
-            derive_wsl_home_dir(&PathBuf::from(r"C:\Users\travis\.config\opencode")),
-            None
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn wsl_unc_custom_dir_uses_nested_mcp_path() {
-        let override_dir = PathBuf::from(r"\\wsl$\Ubuntu\opt\claude\.claude");
-        assert!(default_mcp_path_for_config_dir(&override_dir).is_none());
-        assert_eq!(
-            derive_mcp_path_from_override(&override_dir),
-            PathBuf::from(r"\\wsl$\Ubuntu\opt\claude\.claude\.claude.json")
-        );
-    }
 
     #[test]
     fn sort_json_keys_sorts_top_level_object() {
@@ -1107,13 +777,6 @@ pub fn copy_file(from: &Path, to: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-/// 删除文件
-pub fn delete_file(path: &Path) -> Result<(), AppError> {
-    if path.exists() {
-        fs::remove_file(path).map_err(|e| AppError::io(path, e))?;
-    }
-    Ok(())
-}
 
 /// 检查 Claude Code 配置状态
 #[derive(Serialize, Deserialize)]

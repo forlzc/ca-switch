@@ -75,21 +75,6 @@ pub fn codex_provider_uses_chat_completions(provider: &Provider) -> bool {
         .unwrap_or(false)
 }
 
-pub fn is_codex_responses_endpoint(endpoint: &str) -> bool {
-    let path = endpoint
-        .split_once('?')
-        .map_or(endpoint, |(path, _query)| path);
-
-    matches!(
-        path,
-        "/responses" | "/v1/responses" | "/responses/compact" | "/v1/responses/compact"
-    )
-}
-
-pub fn should_convert_codex_responses_to_chat(provider: &Provider, endpoint: &str) -> bool {
-    is_codex_responses_endpoint(endpoint) && codex_provider_uses_chat_completions(provider)
-}
-
 /// Whether a converted Codex Responses request may send `prompt_cache_key` to
 /// its Chat Completions upstream. Unknown OpenAI-compatible gateways default to
 /// false because many reject unsupported request fields with HTTP 400.
@@ -199,17 +184,6 @@ pub fn codex_provider_uses_anthropic(provider: &Provider) -> bool {
         .and_then(extract_codex_wire_api_from_toml)
         .map(|wire_api| is_anthropic_wire_api(&wire_api))
         .unwrap_or(false)
-}
-
-pub fn should_convert_codex_responses_to_anthropic(provider: &Provider, endpoint: &str) -> bool {
-    let path = endpoint
-        .split_once('?')
-        .map_or(endpoint, |(path, _query)| path);
-
-    matches!(
-        path,
-        "/responses" | "/v1/responses" | "/responses/compact" | "/v1/responses/compact"
-    ) && codex_provider_uses_anthropic(provider)
 }
 
 /// Whether a native-Responses Codex upstream needs Codex `namespace`/plugin
@@ -332,49 +306,6 @@ pub fn is_codex_official_provider(provider: &Provider) -> bool {
     }
 
     is_fixed_official_id || provider.category.as_deref() == Some("official")
-}
-
-/// Vendors whose OFFICIAL Codex integration is a native `/responses` gateway that
-/// rejects Codex's freeform custom tools (`apply_patch` with `type: "custom"`,
-/// #6944). This is intentionally separate from `CODEX_WEB_SEARCH_REJECT_HOSTS`:
-/// web-search compatibility alone must not change a stored Chat provider's
-/// protocol or catalog. Matched on
-/// host labels via `codex_url_host_matches_any`, never by substring.
-const CODEX_NATIVE_RESPONSES_HOSTS: &[&str] = &[
-    "bigmodel.cn",
-    "z.ai",
-    "xiaomimimo.com",
-    "minimaxi.com",
-    "minimax.cn",
-    "minimax.io",
-    "longcat.chat",
-];
-
-/// Path markers of a listed vendor's OpenAI *Chat Completions* endpoint, which is
-/// NOT its Responses endpoint. Zhipu documents three separate base URLs per site
-/// (Anthropic `/api/anthropic`, Chat `/api/coding/paas/v4` + pay-as-you-go
-/// `/api/paas/v4`, Responses `/api/v1`) and warns that the wrong one cannot use
-/// Coding Plan quota. A stored provider still pointing at a Chat path is a
-/// pre-2026-09 Chat-route record: it keeps its `ProxyChat` catalog (the proxy
-/// route converts it correctly; direct connect fails loudly with the #6944 400
-/// until the preset is re-imported) instead of being silently steered onto the
-/// wrong endpoint with a native catalog.
-const CODEX_NATIVE_RESPONSES_CHAT_PATH_MARKERS: &[&str] = &["/paas/v4"];
-
-/// Whether `base_url` points at a listed vendor's native Responses gateway, so a
-/// provider whose stored `apiFormat` predates the preset's switch to
-/// `openai_responses` still gets the `NativeResponses` catalog without a re-save.
-pub fn is_codex_native_responses_url(base_url: &str) -> bool {
-    if !codex_url_host_matches_any(base_url, CODEX_NATIVE_RESPONSES_HOSTS) {
-        return false;
-    }
-    if is_chat_completions_url(base_url) {
-        return false;
-    }
-    let lower = base_url.to_ascii_lowercase();
-    !CODEX_NATIVE_RESPONSES_CHAT_PATH_MARKERS
-        .iter()
-        .any(|marker| lower.contains(marker))
 }
 
 /// Extract the real upstream model configured for a Codex provider.
@@ -832,17 +763,6 @@ fn extract_codex_auth_api_key(auth: &JsonValue) -> Option<String> {
         .map(str::trim)
         .filter(|key| !key.is_empty())
         .map(str::to_string)
-}
-
-fn codex_url_host_matches_any(base_url: &str, hosts: &[&str]) -> bool {
-    let Ok(url) = url::Url::parse(base_url) else {
-        return false;
-    };
-    url.host_str().is_some_and(|host| {
-        hosts
-            .iter()
-            .any(|candidate| host == *candidate || host.ends_with(&format!(".{candidate}")))
-    })
 }
 
 impl CodexAdapter {

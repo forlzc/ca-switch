@@ -37,16 +37,6 @@ fn keep_common_config_for_old_versions(provider: &mut Provider) {
 /// Provider business logic service
 pub struct ProviderService;
 
-/// Native provider lists refresh saved rows as well as reading them. Keep the
-/// entire snapshot/readback under the same per-app lock as provider mutations,
-/// so an in-flight list cannot restore a deleted row or overwrite a newer edit.
-fn lock_native_provider_operations(
-    _state: &AppState,
-    _app_type: &AppType,
-) -> Option<tokio::sync::OwnedMutexGuard<()>> {
-    None
-}
-
 /// Result of a provider switch operation, including any non-fatal warnings
 #[derive(Debug, serde::Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -65,13 +55,6 @@ impl ProviderService {
         }
     }
 
-
-    fn set_provider_live_config_managed(provider: &mut Provider, managed: bool) {
-        provider
-            .meta
-            .get_or_insert_with(Default::default)
-            .live_config_managed = Some(managed);
-    }
 
     fn normalize_usage_script_credential_overrides(app_type: &AppType, provider: &mut Provider) {
         let current_credentials = provider.resolve_usage_credentials(app_type);
@@ -412,52 +395,6 @@ impl ProviderService {
             .map_err(|e| AppError::Message(format!("Serialization failed: {e}")))
     }
 
-
-    /// Extract common config for OpenCode (JSON format)
-    fn extract_opencode_common_config(settings: &Value) -> Result<String, AppError> {
-        // OpenCode uses a different config structure with npm, options, models
-        // For common config, we exclude provider-specific fields like apiKey
-        let mut config = settings.clone();
-
-        // Remove provider-specific fields
-        if let Some(obj) = config.as_object_mut() {
-            for key in ["options", "settings"] {
-                if let Some(options) = obj.get_mut(key).and_then(|v| v.as_object_mut()) {
-                    options.remove("apiKey");
-                    options.remove("baseURL");
-                }
-            }
-            // Keep npm and models as they might be common
-        }
-
-        if config.is_null() || (config.is_object() && config.as_object().unwrap().is_empty()) {
-            return Ok("{}".to_string());
-        }
-
-        serde_json::to_string_pretty(&config)
-            .map_err(|e| AppError::Message(format!("Serialization failed: {e}")))
-    }
-
-    /// Extract common config for OpenClaw (JSON format)
-    fn extract_openclaw_common_config(settings: &Value) -> Result<String, AppError> {
-        // OpenClaw uses a different config structure with baseUrl, apiKey, api, models
-        // For common config, we exclude provider-specific fields like apiKey
-        let mut config = settings.clone();
-
-        // Remove provider-specific fields
-        if let Some(obj) = config.as_object_mut() {
-            obj.remove("apiKey");
-            obj.remove("baseUrl");
-            // Keep api and models as they might be common
-        }
-
-        if config.is_null() || (config.is_object() && config.as_object().unwrap().is_empty()) {
-            return Ok("{}".to_string());
-        }
-
-        serde_json::to_string_pretty(&config)
-            .map_err(|e| AppError::Message(format!("Serialization failed: {e}")))
-    }
 
     /// Update a provider
     pub fn update(

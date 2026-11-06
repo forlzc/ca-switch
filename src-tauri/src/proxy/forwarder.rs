@@ -40,8 +40,6 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-const PROXY_AUTH_PLACEHOLDER: &str = "PROXY_MANAGED";
-
 /// 入口协议：由请求路径决定，路径信息不足时才退回客户端家族。
 ///
 /// 同一个客户端入口可能同时提供多种路径（Codex 既有 `/v1/responses`，
@@ -205,7 +203,6 @@ fn without_cache_control(value: &Value) -> Value {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexUpstreamFormat {
-    NativeResponses,
     ChatCompletions,
     Anthropic,
 }
@@ -1330,7 +1327,7 @@ impl RequestForwarder {
         let endpoint = endpoint;
 
         // 使用适配器提取 base_url
-        let mut base_url = adapter.extract_base_url(provider)?;
+        let base_url = adapter.extract_base_url(provider)?;
 
         let is_full_url = provider
             .meta
@@ -1342,8 +1339,8 @@ impl RequestForwarder {
         let is_copilot = false;
 
         // Codex 客户端专属的上游转换模式已移除。
-        let mut codex_responses_to_chat = false;
-        let mut codex_responses_to_anthropic = false;
+        let codex_responses_to_chat = false;
+        let codex_responses_to_anthropic = false;
         // P4：Chat 入口 × Responses 上游。请求方向改 endpoint 与 body，
         // 响应方向由 handle_chat_completions 依据供应商协议转回 Chat 形状。
         let chat_to_responses = !codex_responses_to_chat
@@ -1356,7 +1353,6 @@ impl RequestForwarder {
         // 与 CCH 对齐：请求前不做 thinking 主动改写（仅保留兼容入口）
         let mut mapped_body = normalize_thinking_type(mapped_body);
         let is_copilot_codex_responses = false;
-        let is_copilot_claude_body = false;
 
         // The OpenCode gateway wants a stable per-conversation session id (see the
         // injection site below). It has to be derived here: `mapped_body` is moved
@@ -1454,8 +1450,6 @@ impl RequestForwarder {
         let chat_responses_base_is_chat_endpoint =
             chat_to_responses && base_url_is_full_endpoint(&base_url, "/chat/completions");
 
-        let codex_standalone_endpoint: Option<CodexStandaloneEndpoint> = None;
-
         let url = if matches!(resolved_claude_api_format.as_deref(), Some("gemini_native")) {
             super::gemini_url::resolve_gemini_native_url(
                 &base_url,
@@ -1466,12 +1460,6 @@ impl RequestForwarder {
             if chat_to_responses {
                 let rewritten = rewrite_base_url_chat_to_responses(&base_url);
                 append_query_to_full_url(&rewritten, passthrough_query.as_deref())
-            } else if let Some(endpoint) = codex_standalone_endpoint {
-                rewrite_codex_standalone_full_url(
-                    &base_url,
-                    passthrough_query.as_deref(),
-                    endpoint,
-                )?
             } else {
                 append_query_to_full_url(&base_url, passthrough_query.as_deref())
             }
@@ -1480,13 +1468,6 @@ impl RequestForwarder {
             append_query_to_full_url(&rewritten, passthrough_query.as_deref())
         } else if chat_responses_base_is_full_endpoint {
             append_query_to_full_url(&base_url, passthrough_query.as_deref())
-        } else if let Some(endpoint) = codex_standalone_endpoint
-            .filter(|endpoint| endpoint.base_url_is_source_endpoint(&base_url))
-        {
-            // Same tolerance as `codex_chat_base_is_full_endpoint` below: a base URL
-            // pasted as a complete endpoint with the full-URL switch off would
-            // otherwise become `.../chat/completions/images/generations`.
-            rewrite_codex_standalone_full_url(&base_url, passthrough_query.as_deref(), endpoint)?
         } else if codex_chat_base_is_full_endpoint || codex_anthropic_base_is_full_endpoint {
             append_query_to_full_url(&base_url, passthrough_query.as_deref())
         } else {
@@ -1748,7 +1729,7 @@ impl RequestForwarder {
         // 获取认证头（提前准备，用于内联替换），同时保留仅用于日志脱敏的
         // 精确认证材料。实际日志永远不输出这些值。
         let mut log_secrets: Vec<String> = Vec::new();
-        let mut auth_headers = if let Some(mut auth) = adapter.extract_auth(provider) {
+        let mut auth_headers = if let Some(auth) = adapter.extract_auth(provider) {
             for secret in std::iter::once(&auth.api_key).chain(auth.access_token.iter()) {
                 if !secret.is_empty() && !log_secrets.contains(secret) {
                     log_secrets.push(secret.clone());
@@ -2567,7 +2548,7 @@ impl RequestForwarder {
 
 
 
-    fn categorize_proxy_error(&self, error: &ProxyError, provider: &Provider) -> ErrorCategory {
+    fn categorize_proxy_error(&self, error: &ProxyError, _provider: &Provider) -> ErrorCategory {
         match error {
             // 网络和上游错误：都应该尝试下一个供应商
             ProxyError::Timeout(_) => ErrorCategory::Retryable,
@@ -3208,149 +3189,6 @@ fn append_query_to_full_url(base_url: &str, query: Option<&str>) -> String {
         _ => base_url.to_string(),
     }
 }
-
-#[derive(Clone, Copy)]
-enum CodexStandaloneEndpoint {
-    AlphaSearch,
-    ImagesGenerations,
-    ImagesEdits,
-}
-
-impl CodexStandaloneEndpoint {
-    fn from_effective_endpoint(endpoint: &str) -> Option<Self> {
-        match split_endpoint_and_query(endpoint).0 {
-            "/alpha/search" => Some(Self::AlphaSearch),
-            "/images/generations" => Some(Self::ImagesGenerations),
-            "/images/edits" => Some(Self::ImagesEdits),
-            _ => None,
-        }
-    }
-
-    fn path(self) -> &'static str {
-        match self {
-            Self::AlphaSearch => "/alpha/search",
-            Self::ImagesGenerations => "/images/generations",
-            Self::ImagesEdits => "/images/edits",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::AlphaSearch => "Codex Alpha Search",
-            Self::ImagesGenerations => "Codex Images generations",
-            Self::ImagesEdits => "Codex Images edits",
-        }
-    }
-
-    fn full_url_hint(self) -> &'static str {
-        match self {
-            Self::AlphaSearch => "/responses",
-            Self::ImagesGenerations | Self::ImagesEdits => {
-                "/responses, /chat/completions, /images/generations, or /images/edits"
-            }
-        }
-    }
-
-    /// Full-URL suffixes that unambiguously locate this endpoint's sibling.
-    ///
-    /// Order matters: a longer suffix must precede any suffix it ends with
-    /// (`/responses/compact` before `/responses`), otherwise the shorter one
-    /// wins and the rewrite keeps a stray `/compact` segment.
-    fn source_suffixes(self) -> &'static [&'static str] {
-        match self {
-            Self::AlphaSearch => &["/responses/compact", "/responses"],
-            // Both Images routes live next to each other, so a full URL pasted
-            // for either one is a valid source for the other.
-            Self::ImagesGenerations | Self::ImagesEdits => &[
-                "/images/generations",
-                "/images/edits",
-                "/chat/completions",
-                "/responses/compact",
-                "/responses",
-            ],
-        }
-    }
-
-    fn source_suffix(self, parsed_path: &str) -> Option<&'static str> {
-        // Match the case-insensitive pasted-endpoint check. Only normalize for
-        // matching; the rewrite keeps the original URL prefix and query intact.
-        let parsed_path = parsed_path.to_ascii_lowercase();
-        self.source_suffixes()
-            .iter()
-            .copied()
-            .find(|suffix| parsed_path.ends_with(suffix))
-    }
-
-    /// Whether a base URL (full-URL switch off) already ends in one of this
-    /// endpoint's source suffixes, i.e. was pasted as a complete endpoint URL.
-    fn base_url_is_source_endpoint(self, base_url: &str) -> bool {
-        self.source_suffixes()
-            .iter()
-            .any(|suffix| base_url_is_full_endpoint(base_url, suffix))
-    }
-}
-
-/// Derive Codex standalone sibling endpoints from a provider configured with a
-/// complete Codex-compatible API URL.
-///
-/// Full-URL mode normally means "use this exact URL". That is correct for the
-/// request type it was configured for, but standalone Codex protocols cannot be
-/// posted to chat/responses endpoints. Only rewrite URL shapes whose sibling
-/// endpoint is unambiguous; opaque full URLs fail closed instead of leaking the
-/// payload to an unrelated route.
-fn rewrite_codex_standalone_full_url(
-    base_url: &str,
-    request_query: Option<&str>,
-    endpoint: CodexStandaloneEndpoint,
-) -> Result<String, ProxyError> {
-    let trimmed = base_url.trim();
-    let parsed = url::Url::parse(trimmed).map_err(|_| {
-        ProxyError::ConfigError(format!("{} requires a valid full URL", endpoint.label()))
-    })?;
-
-    // Fragments are never sent in HTTP requests. Drop one before splitting the
-    // query so an accidental fragment cannot move the incoming query behind `#`.
-    let without_fragment = trimmed
-        .split_once('#')
-        .map_or(trimmed, |(head, _fragment)| head);
-    let (url_without_query, base_query) = without_fragment
-        .split_once('?')
-        .map_or((without_fragment, None), |(head, query)| {
-            (head, Some(query))
-        });
-    let url_without_query = url_without_query.trim_end_matches('/');
-
-    let parsed_path = parsed.path().trim_end_matches('/').to_string();
-    let suffix = endpoint.source_suffix(&parsed_path).ok_or_else(|| {
-        ProxyError::ConfigError(format!(
-            "{} cannot derive {} from an opaque full URL; use a base URL or a full URL ending in {}",
-            endpoint.label(),
-            endpoint.path(),
-            endpoint.full_url_hint()
-        ))
-    })?;
-
-    let prefix_len = url_without_query
-        .len()
-        .checked_sub(suffix.len())
-        .ok_or_else(|| ProxyError::ConfigError("Invalid Codex full URL".to_string()))?;
-    let mut rewritten = format!("{}{}", &url_without_query[..prefix_len], endpoint.path());
-
-    let request_query = request_query.filter(|query| !query.is_empty());
-    let base_query = base_query.filter(|query| !query.is_empty());
-    match (base_query, request_query) {
-        (Some(base), Some(request)) => rewritten.push_str(&format!("?{base}&{request}")),
-        (Some(base), None) => rewritten.push_str(&format!("?{base}")),
-        (None, Some(request)) => rewritten.push_str(&format!("?{request}")),
-        (None, None) => {}
-    }
-
-    Ok(rewritten)
-}
-
-
-
-
 
 fn should_preserve_exact_header_case(
     adapter_name: &str,

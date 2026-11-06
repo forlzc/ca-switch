@@ -185,11 +185,6 @@ impl ApiFormat {
             (AppType::Claude, GeminiNative) => Some("gemini_native"),
         }
     }
-
-    /// 链接没写 `apiFormat` 时默认使用 Anthropic Messages。
-    fn default_for(_app_type: &AppType) -> Self {
-        Self::Anthropic
-    }
 }
 
 /// 核对链接的 `apiFormat` 在这个应用上是否可用（解析和导入两处都调）。
@@ -216,15 +211,6 @@ fn link_api_format(
     };
     check_api_format(app_type.as_str(), value)?;
     ApiFormat::parse(value).map(Some)
-}
-
-/// 应用配置里选择协议的字段值：链接写了就按链接，没写用应用默认。
-fn native_protocol(app_type: &AppType, api_format: Option<ApiFormat>) -> &'static str {
-    let format = api_format.unwrap_or_else(|| ApiFormat::default_for(app_type));
-    format
-        .native_value(app_type)
-        .or_else(|| ApiFormat::default_for(app_type).native_value(app_type))
-        .unwrap_or_default()
 }
 
 /// 累加式应用读配置时会解释的字符串写法，链接带了就拒绝导入。

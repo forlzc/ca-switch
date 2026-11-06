@@ -2,12 +2,14 @@
 //!
 //! 负责选择和管理代理目标供应商，实现智能故障转移
 
+#[cfg(test)]
 use crate::app_config::AppType;
 use crate::database::Database;
 use crate::error::AppError;
 use crate::provider::Provider;
 use crate::proxy::circuit_breaker::{AllowResult, CircuitBreaker, CircuitBreakerConfig};
 use std::collections::HashMap;
+#[cfg(test)]
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -39,6 +41,7 @@ impl ProviderRouter {
     /// 返回按优先级排序的可用供应商列表：
     /// - 故障转移关闭时：仅返回当前供应商
     /// - 故障转移开启时：仅使用故障转移队列，按队列顺序依次尝试（P1 → P2 → ...）
+    #[cfg(test)]
     pub async fn select_providers(&self, app_type: &str) -> Result<Vec<Provider>, AppError> {
         // 只有一份激活指针：代理路由就是直连指针。
         let current_provider = AppType::from_str(app_type).ok().and_then(|app_enum| {

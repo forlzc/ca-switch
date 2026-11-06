@@ -323,20 +323,6 @@ fn should_preserve_reasoning_content_for_openai_chat(provider: &Provider, body: 
         .any(is_reasoning_vendor_identifier)
 }
 
-/// 发往 xAI Responses 的请求。OAuth 卡的地址可被改写，不能只看 base URL。
-fn claude_responses_targets_xai(provider: &Provider) -> bool {
-    [
-        provider.settings_config.pointer("/env/ANTHROPIC_BASE_URL"),
-        provider.settings_config.get("base_url"),
-        provider.settings_config.get("baseURL"),
-        provider.settings_config.get("apiEndpoint"),
-    ]
-    .into_iter()
-    .flatten()
-    .filter_map(Value::as_str)
-    .any(|url| url.to_ascii_lowercase().contains("api.x.ai"))
-}
-
 pub fn transform_claude_request_for_api_format(
     body: serde_json::Value,
     provider: &Provider,

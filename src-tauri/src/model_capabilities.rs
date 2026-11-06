@@ -57,20 +57,6 @@ pub(crate) fn is_text_only_model_from_settings(
         .unwrap_or_else(|| use_confirmed_registry && is_confirmed_text_only_model(model))
 }
 
-/// Convert a catalog row's explicit modality list into the shared capability
-/// representation, falling back to the text-only registry when omitted.
-pub(crate) fn image_input_capability_from_modalities(
-    model: &str,
-    modalities: Option<&[String]>,
-) -> ImageInputCapability {
-    let declared_support = modalities.map(|items| {
-        items
-            .iter()
-            .any(|item| item.trim().eq_ignore_ascii_case("image"))
-    });
-    resolve_image_input_capability(model, declared_support, true)
-}
-
 /// Models that CC Switch is willing to advertise to clients as text-only.
 ///
 /// This registry is deliberately exact and fail-open. A new suffix is not
@@ -266,7 +252,7 @@ fn model_ids_match(candidate: &str, model: &str) -> bool {
 }
 
 fn normalize_model_id(value: &str) -> String {
-    let mut normalized = value
+    let normalized = value
         .trim()
         .trim_start_matches("models/")
         .trim()
