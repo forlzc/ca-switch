@@ -959,7 +959,10 @@
     },
     "data": {
       "location": "Location"
-    }
+    },
+    "credits": "Based on cc-switch by farion1231; thanks to the original author. This fork is maintained by forlzc.",
+    "originalRepo": "Original project",
+    "forkRepo": "This fork"
   },
   "apps": {
     "claude": "API"

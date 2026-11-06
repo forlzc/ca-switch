@@ -29,3 +29,11 @@ pnpm tauri dev
 ```
 
 数据目录：`~/.ca-switch/`（首次启动会从 `~/.cc-switch/` 复制旧数据库）。
+
+## 致谢
+
+CA Switch 基于 [farion1231/cc-switch](https://github.com/farion1231/cc-switch) 修改而来。
+感谢原作者及所有贡献者的工作。
+
+本分支由 [forlzc](https://github.com/forlzc) 维护，仓库地址：
+[forlzc/cc-switch](https://github.com/forlzc/cc-switch)。

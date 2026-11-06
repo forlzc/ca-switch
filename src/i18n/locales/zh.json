@@ -959,7 +959,10 @@
     },
     "data": {
       "location": "存储位置"
-    }
+    },
+    "credits": "感谢原作者 farion1231 的 cc-switch；本分支由 forlzc 维护。",
+    "originalRepo": "原始项目",
+    "forkRepo": "本分支仓库"
   },
   "apps": {
     "claude": "API"

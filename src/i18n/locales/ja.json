@@ -947,7 +947,10 @@
     },
     "data": {
       "location": "保存場所"
-    }
+    },
+    "credits": "farion1231 氏の cc-switch を基に改修しています。原作者に感謝します。本フォークは forlzc が保守しています。",
+    "originalRepo": "オリジナルプロジェクト",
+    "forkRepo": "このフォーク"
   },
   "apps": {
     "claude": "API"

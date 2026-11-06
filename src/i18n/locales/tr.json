@@ -936,7 +936,10 @@
     },
     "data": {
       "location": "Konum"
-    }
+    },
+    "credits": "farion1231 tarafından geliştirilen cc-switch temel alınmıştır; orijinal yazara teşekkürler. Bu çatallama forlzc tarafından sürdürülmektedir.",
+    "originalRepo": "Orijinal proje",
+    "forkRepo": "Bu çatallama"
   },
   "apps": {
     "claude": "API"

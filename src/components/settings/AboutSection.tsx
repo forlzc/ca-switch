@@ -104,13 +104,13 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
 
       if (!displayVersion) {
         await settingsApi.openExternal(
-          "https://github.com/forlzc/cc-switch/releases",
+          "https://github.com/farion1231/cc-switch/releases",
         );
         return;
       }
 
       await settingsApi.openExternal(
-        `https://github.com/forlzc/cc-switch/releases/tag/${displayVersion}`,
+        `https://github.com/farion1231/cc-switch/releases/tag/${displayVersion}`,
       );
     } catch (error) {
       console.error("[AboutSection] Failed to open release notes", error);
@@ -119,6 +119,10 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
   }, [t, updateInfo?.availableVersion, version]);
 
   const handleOpenGithub = useCallback(() => {
+    void settingsApi.openExternal("https://github.com/farion1231/cc-switch");
+  }, []);
+
+  const handleOpenFork = useCallback(() => {
     void settingsApi.openExternal("https://github.com/forlzc/cc-switch");
   }, []);
 
@@ -221,6 +225,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
               </Badge>
             )}
           </div>
+          <p className="mt-1 text-caption text-fg-2">{t("settings.credits")}</p>
         </div>
         <Button
           type="button"
@@ -272,17 +277,24 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
       )}
 
       <div className="flex flex-wrap items-center gap-2 px-5 py-4">
-        {starPromptDismissed && (
-          <Button
-            type="button"
-            variant="neutral"
-            size="compact"
-            onClick={handleOpenGithub}
-          >
-            <Github className="h-3.5 w-3.5" />
-            {t("settings.github")}
-          </Button>
-        )}
+        <Button
+          type="button"
+          variant="neutral"
+          size="compact"
+          onClick={handleOpenGithub}
+        >
+          <Github className="h-3.5 w-3.5" />
+          {t("settings.originalRepo")}
+        </Button>
+        <Button
+          type="button"
+          variant="neutral"
+          size="compact"
+          onClick={handleOpenFork}
+        >
+          <Github className="h-3.5 w-3.5" />
+          {t("settings.forkRepo")}
+        </Button>
         <Button
           type="button"
           variant="neutral"

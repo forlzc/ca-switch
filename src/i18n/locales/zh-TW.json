@@ -948,7 +948,10 @@
     },
     "data": {
       "location": "儲存位置"
-    }
+    },
+    "credits": "感謝原作者 farion1231 的 cc-switch；本分支由 forlzc 維護。",
+    "originalRepo": "原始專案",
+    "forkRepo": "本分支儲存庫"
   },
   "apps": {
     "claude": "API"
