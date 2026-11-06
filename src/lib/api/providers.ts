@@ -6,7 +6,6 @@ import type {
   UniversalProvidersMap,
 } from "@/types";
 import type { AppId } from "./types";
-import type { RouteSwitchResult } from "@/types/proxy";
 
 export interface ProviderSortUpdate {
   id: string;
@@ -20,7 +19,6 @@ export interface ProviderSwitchEvent {
 
 export interface SwitchResult {
   warnings: string[];
-  route?: RouteSwitchResult;
 }
 
 export interface OpenTerminalOptions {
@@ -62,10 +60,6 @@ export const providersApi = {
 
   async switch(id: string, appId: AppId): Promise<SwitchResult> {
     return await invoke("switch_provider", { id, app: appId });
-  },
-
-  async importDefault(appId: AppId): Promise<boolean> {
-    return await invoke("import_default_config", { app: appId });
   },
 
   async updateTrayMenu(): Promise<boolean> {

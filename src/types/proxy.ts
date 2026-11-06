@@ -41,23 +41,6 @@ export interface ProxyServerInfo {
   started_at: string;
 }
 
-export interface ProxyTakeoverStatus {
-  claude: boolean;
-  "claude-desktop"?: boolean;
-  codex: boolean;
-  gemini: boolean;
-  grokbuild: boolean;
-  opencode: boolean;
-  openclaw: boolean;
-  hermes: boolean;
-}
-
-/** Applied under the backend switch lock, not inferred from a possibly stale UI mode. */
-export interface RouteSwitchResult {
-  kind: "remembered" | "route" | "stack";
-  clientConfigChanged: boolean;
-}
-
 /** 应用当前的连接方式。 */
 export type AppMode = "direct" | "route" | "stack";
 

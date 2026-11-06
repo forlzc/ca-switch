@@ -77,17 +77,6 @@ describe("useProxyStatus", () => {
         });
       }
 
-      if (command === "get_proxy_takeover_status") {
-        return Promise.resolve({
-          claude: false,
-          codex: false,
-          gemini: false,
-          grokbuild: false,
-          opencode: false,
-          openclaw: false,
-        });
-      }
-
       if (command === "start_proxy_server") {
         return Promise.resolve({
           address: "127.0.0.1",
@@ -102,7 +91,6 @@ describe("useProxyStatus", () => {
 
   it("keeps the established proxy query key shapes", () => {
     expect(proxyKeys.status).toEqual(["proxyStatus"]);
-    expect(proxyKeys.takeoverStatus).toEqual(["proxyTakeoverStatus"]);
     expect(proxyKeys.globalConfig).toEqual(["globalProxyConfig"]);
     expect(proxyKeys.appConfig("claude")).toEqual(["appProxyConfig", "claude"]);
   });

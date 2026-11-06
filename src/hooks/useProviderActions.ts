@@ -12,7 +12,7 @@ import {
   useSwitchProviderMutation,
 } from "@/lib/query";
 import { usageKeys } from "@/lib/query/usage";
-import { routeSwitchNotification } from "@/utils/routeSwitchNotification";
+
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { getRoutingReason } from "@/utils/routingReason";
 import { logFrontendInfo } from "@/lib/frontendLogger";
@@ -87,13 +87,13 @@ export function useProviderActions(
       }
 
       try {
-        const result = await switchProviderMutation.mutateAsync(provider.id);
+        await switchProviderMutation.mutateAsync(provider.id);
 
         if (!proxyRequiredReason) {
-          const message = result?.route
-            ? routeSwitchNotification(result.route, activeApp, provider.name, t)
-            : t("notifications.switchSuccess", { defaultValue: "切换成功！" });
-          toast.success(message, { closeButton: true });
+          toast.success(
+            t("notifications.switchSuccess", { defaultValue: "切换成功！" }),
+            { closeButton: true },
+          );
         }
       } catch {
         // 错误提示由 mutation 处理

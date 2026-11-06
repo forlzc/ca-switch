@@ -2,15 +2,10 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { proxyApi } from "@/lib/api/proxy";
 import { toast } from "@/lib/toast";
 import { useTranslation } from "react-i18next";
-import type {
-  GlobalProxyConfig,
-  AppProxyConfig,
-  ProxyTakeoverStatus,
-} from "@/types/proxy";
+import type { GlobalProxyConfig, AppProxyConfig } from "@/types/proxy";
 
 export const proxyKeys = {
   status: ["proxyStatus"] as const,
-  takeoverStatus: ["proxyTakeoverStatus"] as const,
   globalConfig: ["globalProxyConfig"] as const,
   clientHost: ["proxyClientHost"] as const,
   appConfig: (appType: string) => ["appProxyConfig", appType] as const,
@@ -29,51 +24,6 @@ export function useProxyStatusQuery() {
     refetchInterval: (query) => (query.state.data?.running ? 2000 : false),
     // 保持之前的数据，避免闪烁
     placeholderData: (previousData) => previousData,
-  });
-}
-
-/**
- * 获取各应用接管状态
- */
-export function useProxyTakeoverStatus(poll = true) {
-  return useQuery({
-    queryKey: proxyKeys.takeoverStatus,
-    queryFn: () => proxyApi.getProxyTakeoverStatus(),
-    refetchInterval: poll ? 2000 : false,
-    ...(poll
-      ? {}
-      : {
-          placeholderData: (previousData: ProxyTakeoverStatus | undefined) =>
-            previousData,
-        }),
-  });
-}
-
-// ========== 代理服务器控制 Hooks ==========
-
-/**
- * 设置应用接管状态
- */
-export function useSetProxyTakeoverForApp() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: ({
-      appType,
-      enabled,
-      stack = false,
-    }: {
-      appType: string;
-      enabled: boolean;
-      stack?: boolean;
-    }) => proxyApi.setProxyTakeoverForApp(appType, enabled, stack),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: proxyKeys.takeoverStatus });
-      // 进出路由模式会改「当前」显示的供应商（路由模式下是路由到的那家）。
-      queryClient.invalidateQueries({
-        queryKey: ["providers", variables.appType],
-      });
-    },
   });
 }
 
