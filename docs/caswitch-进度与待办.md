@@ -496,8 +496,8 @@ git tag -a caswitch-base bc4c4c45 -m "caswitch 重构前基线（fork/build 合�
 
 - 版本 `4.0.25`，tag `v4.0.25` → `2ea72fce`，Release 由该提交重新构建并发布：
   https://github.com/forlzc/ca-switch/releases/tag/v4.0.25
-- 资产：`CA.Switch_4.0.25_x64_en-US.msi`（12,599,296）、
-  `CC-Switch-v4.0.25-Windows-Portable.zip`（12,366,805）、`CA.Switch_4.0.25_amd64.deb`（12,857,090）
+- 资产：`CA.Switch_4.0.25_x64.msi`（12,537,856，文件名不再带 WiX 的 `en-US` 段）、
+  `CC-Switch-v4.0.25-Windows-Portable.zip`（12,303,644）、`CA.Switch_4.0.25_amd64.deb`（12,802,942）
 - Windows 由 GitHub Actions `windows-2022` 原生构建；Linux deb 为本机构建，均关闭 updater 产物（无签名私钥）。
 - 旧 `fork-v1/2/3` Release 与 tag 已清理；本地 `caswitch-base` 基线 tag 保留。
 - 仓库已由 `cc-switch` 更名为 `ca-switch`，旧地址由 GitHub 自动重定向；本地 `origin` 已更新。

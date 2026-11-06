@@ -115,6 +115,20 @@ jobs:
           BUNDLES: ${{ inputs.bundles || 'msi' }}
         run: pnpm tauri build --bundles "$BUNDLES"
 
+      # 去掉 WiX 自动追加的语言段（默认 en-US），避免文件名被误读成「只有英文界面」。
+      - name: Strip WiX language suffix from MSI
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for f in src-tauri/target/release/bundle/msi/*.msi; do
+            base="${f%.msi}"
+            if [[ "$base" =~ _[a-z]{2}(-[A-Z]{2})?$ ]]; then
+              renamed="${base%_*}.msi"
+              mv "$f" "$renamed"
+              echo "MSI: $f -> $renamed"
+            fi
+          done
+
       - name: List built artifacts
         shell: bash
         run: |
