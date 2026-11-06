@@ -163,7 +163,7 @@ export function PricingEditModal({
               setFormData({ ...formData, displayName: e.target.value })
             }
             placeholder={t("usage.displayNamePlaceholder", {
-              defaultValue: "例如: Claude 3.5 Sonnet",
+              defaultValue: "例如: 模型名称",
             })}
             required
           />

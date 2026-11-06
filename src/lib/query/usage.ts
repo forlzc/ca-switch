@@ -33,7 +33,6 @@ type RequestLogsKey = {
   customStartDate?: number;
   customEndDate?: number;
   liveEndTime?: boolean;
-  appType?: string;
   providerName?: string;
   model?: string;
   statusCode?: number;
@@ -56,7 +55,6 @@ export const usageKeys = {
       customStartDate ?? 0,
       customEndDate ?? 0,
       liveEndTime ?? false,
-      filters?.appType ?? null,
       filters?.providerName ?? null,
       filters?.model ?? null,
     ] as const,
@@ -91,7 +89,6 @@ export const usageKeys = {
       customStartDate ?? 0,
       customEndDate ?? 0,
       liveEndTime ?? false,
-      filters?.appType ?? null,
       filters?.providerName ?? null,
       filters?.model ?? null,
     ] as const,
@@ -99,7 +96,6 @@ export const usageKeys = {
     [
       ...usageKeys.all,
       "first-date",
-      filters?.appType ?? null,
       filters?.providerName ?? null,
       filters?.model ?? null,
     ] as const,
@@ -117,7 +113,6 @@ export const usageKeys = {
       customStartDate ?? 0,
       customEndDate ?? 0,
       liveEndTime ?? false,
-      filters?.appType ?? null,
       filters?.providerName ?? null,
       filters?.model ?? null,
     ] as const,
@@ -135,7 +130,6 @@ export const usageKeys = {
       customStartDate ?? 0,
       customEndDate ?? 0,
       liveEndTime ?? false,
-      filters?.appType ?? null,
       filters?.providerName ?? null,
       filters?.model ?? null,
     ] as const,
@@ -147,7 +141,6 @@ export const usageKeys = {
       key.customStartDate ?? 0,
       key.customEndDate ?? 0,
       key.liveEndTime ?? false,
-      key.appType ?? "",
       key.providerName ?? "",
       key.model ?? "",
       key.statusCode ?? -1,
@@ -157,8 +150,6 @@ export const usageKeys = {
   detail: (requestId: string) =>
     [...usageKeys.all, "detail", requestId] as const,
   pricing: () => [...usageKeys.all, "pricing"] as const,
-  session: (appType: string, sessionId: string) =>
-    [...usageKeys.all, "session", appType, sessionId] as const,
   limits: (providerId: string, appType: string) =>
     [...usageKeys.all, "limits", providerId, appType] as const,
   script: (providerId: string, appType: string) =>
@@ -168,7 +159,6 @@ export const usageKeys = {
 /** 把 UI 侧的 "all" 哨兵归一成 undefined（后端语义：不过滤）。 */
 function normalizeScopeFilters(filters?: UsageScopeFilters): UsageScopeFilters {
   return {
-    appType: filters?.appType === "all" ? undefined : filters?.appType,
     providerName: filters?.providerName,
     model: filters?.model,
   };
@@ -196,7 +186,6 @@ export function useUsageSummary(
       return usageApi.getUsageSummary(
         startDate,
         endDate,
-        effective.appType,
         effective.providerName,
         effective.model,
       );
@@ -254,7 +243,6 @@ export function useUsageTrends(
       return usageApi.getUsageTrends(
         startDate,
         endDate,
-        effective.appType,
         effective.providerName,
         effective.model,
       );
@@ -276,7 +264,6 @@ export function useUsageFirstDate(
     queryKey: usageKeys.firstDate(effective),
     queryFn: () =>
       usageApi.getUsageFirstDate(
-        effective.appType,
         effective.providerName,
         effective.model,
       ),
@@ -305,7 +292,6 @@ export function useProviderStats(
       return usageApi.getProviderStats(
         startDate,
         endDate,
-        effective.appType,
         effective.providerName,
         effective.model,
       );
@@ -336,7 +322,6 @@ export function useModelStats(
       return usageApi.getModelStats(
         startDate,
         endDate,
-        effective.appType,
         effective.providerName,
         effective.model,
       );
@@ -360,7 +345,6 @@ export function useRequestLogs({
     customStartDate: range.customStartDate,
     customEndDate: range.customEndDate,
     liveEndTime: range.liveEndTime,
-    appType: filters.appType,
     providerName: filters.providerName,
     model: filters.model,
     statusCode: filters.statusCode,
@@ -384,29 +368,6 @@ export function useRequestDetail(requestId: string) {
     queryKey: usageKeys.detail(requestId),
     queryFn: () => usageApi.getRequestDetail(requestId),
     enabled: !!requestId,
-  });
-}
-
-/**
- * 会话日志扫描（后台定时或手动同步）最近一次完成的时间（毫秒）。
- * 默认 30 秒查询一次；用量页由统一刷新流程在扫描结束后失效重取。
- */
-export function useSessionUsageLastSync(options?: UsageQueryOptions) {
-  return useQuery({
-    queryKey: [...usageKeys.all, "session-last-sync"] as const,
-    queryFn: () => usageApi.getSessionUsageLastSync(),
-    refetchInterval: options?.refetchInterval ?? DEFAULT_REFETCH_INTERVAL_MS,
-    refetchIntervalInBackground: options?.refetchIntervalInBackground ?? false,
-  });
-}
-
-/** 单个会话的用量汇总（会话阅读页头部），只数会话日志导入的行。 */
-export function useSessionUsageSummary(appType: string, sessionId: string) {
-  return useQuery({
-    queryKey: usageKeys.session(appType, sessionId),
-    queryFn: () => usageApi.getSessionUsageSummary(appType, sessionId),
-    refetchInterval: DEFAULT_REFETCH_INTERVAL_MS,
-    refetchIntervalInBackground: false,
   });
 }
 

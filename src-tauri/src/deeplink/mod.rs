@@ -6,16 +6,11 @@
 //! - Prompts
 //!
 
-mod codex_link;
-mod grok_link;
 mod icon_fetch;
 mod parser;
 mod prompt;
 mod provider;
 mod utils;
-
-#[cfg(test)]
-mod tests;
 
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};

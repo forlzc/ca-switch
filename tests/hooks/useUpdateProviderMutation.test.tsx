@@ -24,7 +24,7 @@ vi.mock("@/hooks/useHermes", () => ({
 
 vi.mock("@/hooks/useOpenClaw", () => ({
   openclawKeys: {
-    health: ["openclaw", "health"],
+    health: ["claude", "health"],
   },
 }));
 
@@ -75,7 +75,7 @@ describe("useUpdateProviderMutation", () => {
   it("invalidates the updated provider usage query", async () => {
     const { wrapper, invalidateSpy } = createWrapper();
     const provider = createProvider({ id: "provider-b" });
-    const { result } = renderHook(() => useUpdateProviderMutation("codex"), {
+    const { result } = renderHook(() => useUpdateProviderMutation("claude"), {
       wrapper,
     });
 
@@ -85,15 +85,14 @@ describe("useUpdateProviderMutation", () => {
 
     expect(apiMocks.update).toHaveBeenCalledWith(
       provider,
-      "codex",
-      undefined,
+      "claude",
       undefined,
     );
     expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: ["providers", "codex"],
+      queryKey: ["providers", "claude"],
     });
     expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: usageKeys.script("provider-b", "codex"),
+      queryKey: usageKeys.script("provider-b", "claude"),
     });
     expect(invalidateSpy).not.toHaveBeenCalledWith({
       queryKey: usageKeys.all,
@@ -103,7 +102,7 @@ describe("useUpdateProviderMutation", () => {
   it("also invalidates the previous usage query when provider id changes", async () => {
     const { wrapper, invalidateSpy } = createWrapper();
     const provider = createProvider({ id: "provider-new" });
-    const { result } = renderHook(() => useUpdateProviderMutation("openclaw"), {
+    const { result } = renderHook(() => useUpdateProviderMutation("claude"), {
       wrapper,
     });
 
@@ -116,15 +115,14 @@ describe("useUpdateProviderMutation", () => {
 
     expect(apiMocks.update).toHaveBeenCalledWith(
       provider,
-      "openclaw",
+      "claude",
       "provider-old",
-      undefined,
     );
     expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: usageKeys.script("provider-new", "openclaw"),
+      queryKey: usageKeys.script("provider-new", "claude"),
     });
     expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: usageKeys.script("provider-old", "openclaw"),
+      queryKey: usageKeys.script("provider-old", "claude"),
     });
     expect(invalidateSpy).not.toHaveBeenCalledWith({
       queryKey: usageKeys.all,

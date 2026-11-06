@@ -8,11 +8,11 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Database,
-  Folder,
   Globe,
   Info,
   Layers,
   Route,
+  Server,
   Settings,
   SlidersHorizontal,
 } from "lucide-react";
@@ -39,7 +39,6 @@ import { HoverTip } from "@/components/ui/hover-tip";
 import { DRAG_REGION_ATTR, DRAG_REGION_STYLE, isMac } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import ccswitchLogo from "@/assets/icons/logo.svg";
-import { APP_DISPLAY_NAME, AppGlyph } from "./AppGlyph";
 
 const NO_DRAG = { WebkitAppRegion: "no-drag" } as React.CSSProperties;
 
@@ -143,7 +142,7 @@ function SidebarTopBar({
             className="pointer-events-none h-5 w-5 shrink-0"
           />
           <span className="pointer-events-none me-auto min-w-0 truncate text-strong font-semibold text-fg-1">
-            CC Switch
+            CA Switch
           </span>
           {toggleButton}
         </div>
@@ -188,7 +187,7 @@ function SidebarTopBar({
             className="h-[22px] w-[22px] shrink-0"
           />
           <span className="truncate text-strong font-semibold text-fg-1">
-            CC Switch
+            CA Switch
           </span>
         </span>
       )}
@@ -213,10 +212,8 @@ function MainDirectory({
   const { hasUpdate } = useUpdate();
   const { appStatus, todayCost, todayTokens, todayRequests, todayHitRate } =
     useSidebarStatus();
-  // 顺序跟应用页拖出来的一致
-  const apps = orderAppIds(settings?.appOrder).filter(
-    (app) => visibleApps[app],
-  );
+  // 精简后只有一个入口
+  const apps = orderAppIds().filter((app) => visibleApps[app]);
   const onAppPage = isAppPage(view);
 
   // 选了的项里是 0 的不写（没配定价时金额总是 0）；命中率在今天还没有请求时不写；
@@ -286,7 +283,6 @@ function MainDirectory({
           {apps.map((app) => (
             <AppNavItem
               key={app}
-              app={app}
               collapsed={collapsed}
               selected={onAppPage && activeApp === app}
               status={appStatus(app)}
@@ -369,20 +365,19 @@ function modeTag(
 }
 
 function AppNavItem({
-  app,
   collapsed,
   selected,
   status,
   onSelect,
 }: {
-  app: AppId;
   collapsed: boolean;
   selected: boolean;
   status: AppNavStatus;
   onSelect: () => void;
 }) {
   const { t } = useTranslation();
-  const name = APP_DISPLAY_NAME[app];
+  // 通用代理软件只有一个供应商入口，不再显示具体客户端名称
+  const name = t("nav.providers");
   const tag = modeTag(status, t);
   const modeName =
     status.mode === "route"
@@ -395,8 +390,6 @@ function AppNavItem({
     : modeName
       ? `${name} · ${modeName}`
       : name;
-  const badgeBg = selected ? "bg-selected" : "bg-sidebar";
-
   if (collapsed) {
     const marker = status.alert
       ? { className: "bg-danger text-action-fg", icon: AlertGlyph }
@@ -418,7 +411,7 @@ function AppNavItem({
           )}
         >
           <span className="relative flex">
-            <AppGlyph app={app} size={20} badgeClassName={badgeBg} />
+            <Server className="h-4 w-4" aria-hidden="true" />
             {marker && (
               <span
                 aria-hidden="true"
@@ -447,7 +440,7 @@ function AppNavItem({
         selected && "bg-selected font-medium hover:bg-selected",
       )}
     >
-      <AppGlyph app={app} size={16} badgeClassName={badgeBg} />
+      <Server className="h-4 w-4 shrink-0" aria-hidden="true" />
       <span className="min-w-0 flex-1 truncate">{name}</span>
       {status.alert ? (
         <span
@@ -519,7 +512,7 @@ function NavItem({
   alert?: string;
   /** 圆点：有更新 */
   dot?: boolean;
-  /** 工具更新用中性色（很多人不想追新）；CC Switch 自己的更新用绿色，和工具更新分开 */
+  /** 工具更新用中性色（很多人不想追新）；CA Switch 自己的更新用绿色，和工具更新分开 */
   dotTone?: "neutral" | "success";
   /** 圆点放在行尾（设置目录里的「关于」），而不是图标角上 */
   endDot?: boolean;
@@ -656,7 +649,6 @@ function NavItem({
 
 const SETTINGS_ITEMS: { section: SettingsSection; icon: IconComponent }[] = [
   { section: "general", icon: SlidersHorizontal },
-  { section: "appConfig", icon: Folder },
   { section: "routing", icon: Route },
   { section: "network", icon: Globe },
   { section: "data", icon: Database },
@@ -728,7 +720,7 @@ function SettingsDirectory({
       </div>
       {!collapsed && version && (
         <div className="shrink-0 px-4 pb-4 text-caption text-fg-3">
-          CC Switch v{version}
+          CA Switch v{version}
         </div>
       )}
     </>

@@ -36,7 +36,7 @@ describe("AppCountBar", () => {
     );
 
     const mixed = screen.getByRole("checkbox", {
-      name: "common.enableAllForApp:Claude",
+      name: "common.enableAllForApp:API",
     });
     expect(mixed).toHaveAttribute("aria-checked", "mixed");
     expect(mixed).toHaveAttribute("data-selection-state", "partial");
@@ -56,7 +56,7 @@ describe("AppCountBar", () => {
     );
 
     const all = screen.getByRole("checkbox", {
-      name: "common.disableAllForApp:Claude",
+      name: "common.disableAllForApp:API",
     });
     expect(all).toHaveAttribute("aria-checked", "true");
     expect(all).toHaveAttribute("data-selection-state", "all");
@@ -79,7 +79,7 @@ describe("AppCountBar", () => {
     );
 
     const none = screen.getByRole("checkbox", {
-      name: "common.enableAllForApp:Claude",
+      name: "common.enableAllForApp:API",
     });
     expect(none).toHaveAttribute("aria-checked", "false");
     expect(none).toHaveAttribute("data-selection-state", "none");
@@ -108,8 +108,8 @@ describe("AppCountBar", () => {
       <AppCountBar
         totalLabel="2 items"
         totalCount={2}
-        counts={{ claude: 1, codex: 1 }}
-        appIds={["claude", "codex"]}
+        counts={{ claude: 1 }}
+        appIds={["claude"]}
         pendingApp="claude"
         onToggleAll={onToggleAll}
       />,
@@ -121,7 +121,7 @@ describe("AppCountBar", () => {
     }
 
     const pendingControl = screen.getByRole("checkbox", {
-      name: "common.enableAllForApp:Claude",
+      name: "common.enableAllForApp:API",
     });
     expect(pendingControl).toHaveAttribute("aria-busy", "true");
     expect(pendingControl.querySelectorAll("span")).toHaveLength(2);

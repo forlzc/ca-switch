@@ -18,7 +18,6 @@ import { useMoneyFormat } from "@/hooks/useMoneyFormat";
 
 interface ProviderStatsTableProps {
   range: UsageRangeSelection;
-  appType?: string;
   providerName?: string;
   model?: string;
   refreshIntervalMs: number;
@@ -26,7 +25,6 @@ interface ProviderStatsTableProps {
 
 export function ProviderStatsTable({
   range,
-  appType,
   providerName,
   model,
   refreshIntervalMs,
@@ -36,7 +34,7 @@ export function ProviderStatsTable({
   const locale = getLocaleFromLanguage(getResolvedLang(i18n));
   const { data: stats, isLoading } = useProviderStats(
     range,
-    { appType, providerName, model },
+    { providerName, model },
     {
       refetchInterval: refreshIntervalMs > 0 ? refreshIntervalMs : false,
     },
@@ -49,7 +47,7 @@ export function ProviderStatsTable({
   );
   const pagination = useClientPagination(
     rows,
-    JSON.stringify([range, appType, providerName, model]),
+    JSON.stringify([range, providerName, model]),
   );
 
   if (isLoading) {

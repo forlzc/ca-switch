@@ -144,8 +144,6 @@ impl Database {
         };
 
         migrate_app_prompts(&config.prompts.claude.prompts, "claude")?;
-        migrate_app_prompts(&config.prompts.codex.prompts, "codex")?;
-        migrate_app_prompts(&config.prompts.gemini.prompts, "gemini")?;
 
         Ok(())
     }
@@ -162,21 +160,6 @@ impl Database {
             )
             .map_err(|e| AppError::Database(format!("Migrate settings failed: {e}")))?;
         }
-        if let Some(snippet) = &config.common_config_snippets.codex {
-            tx.execute(
-                "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
-                params!["common_config_codex", snippet],
-            )
-            .map_err(|e| AppError::Database(format!("Migrate settings failed: {e}")))?;
-        }
-        if let Some(snippet) = &config.common_config_snippets.gemini {
-            tx.execute(
-                "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
-                params!["common_config_gemini", snippet],
-            )
-            .map_err(|e| AppError::Database(format!("Migrate settings failed: {e}")))?;
-        }
-
         Ok(())
     }
 }

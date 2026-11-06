@@ -24,7 +24,6 @@ import type { UsageMetric } from "./rememberedChoice";
 
 interface UsageHeroProps {
   range: UsageRangeSelection;
-  appType?: string;
   providerName?: string;
   model?: string;
   refreshIntervalMs: number;
@@ -78,12 +77,8 @@ export function aggregateSummaries(items: UsageSummary[]): UsageSummary {
 
 function pickSummary(
   apps: UsageSummaryByApp[],
-  appType: string | undefined,
 ): UsageSummary | undefined {
   if (apps.length === 0) return undefined;
-  if (appType) {
-    return apps.find((a) => a.appType === appType)?.summary;
-  }
   return aggregateSummaries(apps.map((a) => a.summary));
 }
 
@@ -206,7 +201,6 @@ function SubMetric({
  */
 export function UsageHero({
   range,
-  appType,
   providerName,
   model,
   refreshIntervalMs,
@@ -228,14 +222,12 @@ export function UsageHero({
     },
   );
 
-  // No client-side filtering: totals must match the Trend/Logs/Stats below,
-  // which all go through the backend's full set of app_types. The
-  // KNOWN_APP_TYPES list only governs which filter chips appear.
+  // 汇总所有入口协议：和下方趋势图 / 日志 / 统计表同一份数据口径。
   const allApps = data ?? [];
-  const summary = pickSummary(allApps, appType);
+  const summary = pickSummary(allApps);
 
   const cacheWriteState = getCacheWriteAvailability(
-    appType ? [appType] : allApps.map((a) => a.appType),
+    allApps.map((a) => a.appType),
   );
 
   const input = summary?.totalInputTokens ?? 0;

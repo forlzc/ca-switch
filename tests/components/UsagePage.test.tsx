@@ -5,13 +5,13 @@ import { UsageDashboard } from "@/components/usage/UsageDashboard";
 
 const autoSaveSettings = vi.hoisted(() => vi.fn());
 const settingsState = vi.hoisted(() => ({
-  current: null as null | {
-    usageDashboardRefreshIntervalMs: number;
-    sessionAutoSyncEnabled: boolean;
-  },
+  current: null as null | Record<string, unknown>,
 }));
 vi.mock("@/hooks/useSettings", () => ({
   useSettings: () => ({ settings: settingsState.current, autoSaveSettings }),
+}));
+vi.mock("@/hooks/useAutoExchangeRates", () => ({
+  useAutoExchangeRates: vi.fn(),
 }));
 vi.mock("@/components/usage/UsageDashboard", () => ({
   UsageDashboard: vi.fn(() => null),
@@ -22,25 +22,14 @@ describe("UsagePage settings persistence", () => {
     autoSaveSettings.mockReset();
     vi.mocked(UsageDashboard).mockClear();
     settingsState.current = {
-      usageDashboardRefreshIntervalMs: 30000,
-      sessionAutoSyncEnabled: true,
+      usageDisplay: { currency: "USD" },
     };
   });
 
-  it("tells the dashboard settings are not ready until they load", () => {
-    settingsState.current = null;
-    const { rerender } = render(<UsagePage />);
+  it("passes display settings through to the dashboard", () => {
+    render(<UsagePage />);
     expect(vi.mocked(UsageDashboard).mock.lastCall![0]).toMatchObject({
-      settingsReady: false,
-    });
-    settingsState.current = {
-      usageDashboardRefreshIntervalMs: 5000,
-      sessionAutoSyncEnabled: false,
-    };
-    rerender(<UsagePage />);
-    expect(vi.mocked(UsageDashboard).mock.lastCall![0]).toMatchObject({
-      settingsReady: true,
-      sessionAutoSyncEnabled: false,
+      usageDisplay: { currency: "USD" },
     });
   });
 
@@ -53,13 +42,13 @@ describe("UsagePage settings persistence", () => {
     );
     render(<UsagePage />);
     const onChange =
-      vi.mocked(UsageDashboard).mock.calls[0][0]!.onRefreshIntervalChange!;
+      vi.mocked(UsageDashboard).mock.calls[0][0]!.onUsageDisplayChange!;
     const settled = vi.fn();
-    const save = Promise.resolve(onChange(5000)).then(settled);
+    const save = Promise.resolve(onChange({ currency: "CNY" })).then(settled);
     await Promise.resolve();
     expect(settled).not.toHaveBeenCalled();
     expect(autoSaveSettings).toHaveBeenCalledWith({
-      usageDashboardRefreshIntervalMs: 5000,
+      usageDisplay: { currency: "CNY" },
     });
     finish({ requiresRestart: false });
     await save;
@@ -74,8 +63,7 @@ describe("UsagePage settings persistence", () => {
       else autoSaveSettings.mockResolvedValue(null);
       render(<UsagePage />);
       const props = vi.mocked(UsageDashboard).mock.calls[0][0]!;
-      await expect(props.onRefreshIntervalChange!(5000)).resolves.toBe(false);
-      await expect(props.onSessionAutoSyncEnabledChange!(false)).resolves.toBe(
+      await expect(props.onUsageDisplayChange!({ currency: "CNY" })).resolves.toBe(
         false,
       );
     },

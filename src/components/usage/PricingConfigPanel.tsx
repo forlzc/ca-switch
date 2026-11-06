@@ -39,8 +39,8 @@ import {
 } from "./format";
 import { usageTable } from "./usageTable";
 
-/** 计费默认配置只管这 4 个有路由用量管线的应用 */
-const PRICING_APPS = ["claude", "codex", "gemini", "grokbuild"] as const;
+/** 计费默认配置只覆盖本地代理这一条管线 */
+const PRICING_APPS = ["claude"] as const;
 type PricingApp = (typeof PRICING_APPS)[number];
 type PricingModelSource = "request" | "response";
 
@@ -48,9 +48,6 @@ type SourceState = Record<PricingApp, PricingModelSource>;
 
 const DEFAULT_SOURCES: SourceState = {
   claude: "response",
-  codex: "response",
-  gemini: "response",
-  grokbuild: "response",
 };
 
 const errorText = (error: unknown) =>
@@ -181,7 +178,7 @@ function BillingDefaultsDialog({
                 index < PRICING_APPS.length - 1 && "border-b border-border",
               )}
             >
-              <AppGlyph app={app} size={16} badgeClassName="bg-surface" />
+              <AppGlyph size={16} />
               <span className="flex-1 text-body text-fg-1">
                 {APP_DISPLAY_NAME[app]}
               </span>

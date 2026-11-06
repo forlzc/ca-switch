@@ -4,10 +4,6 @@ import { useTranslation } from "react-i18next";
 import { type AppId } from "@/lib/api";
 import { useUsageQuery } from "@/lib/query/queries";
 import { UsageData, Provider } from "@/types";
-import {
-  tierLabel,
-  tierShortLabel,
-} from "@/components/SubscriptionQuotaFooter";
 import type { QuotaTier } from "@/types/subscription";
 import { QuotaBars, QuotaLines } from "@/components/quota/QuotaLines";
 import { useQuotaDisplay } from "@/components/quota/useQuotaDisplay";
@@ -25,6 +21,24 @@ interface UsageFooterProps {
   appId: AppId;
   usageEnabled: boolean; // 是否启用了用量查询
   inline?: boolean; // 是否内联显示（在按钮左侧）
+}
+
+/** 已知档位的显示映射（Token Plan 用） */
+const TIER_I18N_KEYS: Record<string, string> = {
+  five_hour: "subscription.fiveHour",
+  seven_day: "subscription.sevenDay",
+  monthly: "subscription.monthly",
+  credits: "subscription.credits",
+};
+
+function tierLabel(t: TFunction, name: string): string {
+  return TIER_I18N_KEYS[name] ? t(TIER_I18N_KEYS[name]) : name;
+}
+
+/** 卡片合并行里的短档名 */
+function tierShortLabel(t: TFunction, name: string): string {
+  const key = TIER_I18N_KEYS[name];
+  return key ? t(key.replace("subscription.", "subscription.short.")) : name;
 }
 
 /** UsageData → QuotaTier 转换（Token Plan 使用） */

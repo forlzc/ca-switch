@@ -12,12 +12,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// Codex Official requests carry the selected account's native Authorization
-/// header. Reusing that request against another account card would cross the
-/// account boundary, so these cards must never participate in provider retry.
-pub(crate) fn provider_supports_failover(app_type: &str, provider: &Provider) -> bool {
-    app_type != AppType::Codex.as_str()
-        || !crate::proxy::providers::is_codex_official_provider(provider)
+/// 当前只有 Claude 一个应用类型，所有供应商都可参与故障转移。
+pub(crate) fn provider_supports_failover(_app_type: &str, _provider: &Provider) -> bool {
+    true
 }
 
 /// 供应商路由器
@@ -458,77 +455,6 @@ mod tests {
 
         assert_eq!(providers.len(), 1);
         assert_eq!(providers[0].id, "b");
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn codex_official_current_stays_single_route_when_failover_is_stale() {
-        let _home = TempHome::new();
-        let db = Arc::new(Database::memory().unwrap());
-        let official = managed_codex_official("official-a", "account-a");
-        let fallback = Provider::with_id(
-            "fallback".to_string(),
-            "Fallback".to_string(),
-            json!({}),
-            None,
-        );
-        db.save_provider("codex", &official).unwrap();
-        db.save_provider("codex", &fallback).unwrap();
-        db.set_current_provider("codex", &official.id).unwrap();
-        db.add_to_failover_queue("codex", &fallback.id).unwrap();
-
-        let mut config = db.get_proxy_config_for_app("codex").await.unwrap();
-        config.auto_failover_enabled = true;
-        db.update_proxy_config_for_app(config).await.unwrap();
-
-        let providers = ProviderRouter::new(db)
-            .select_providers("codex")
-            .await
-            .unwrap();
-        assert_eq!(providers.len(), 1);
-        assert_eq!(providers[0].id, official.id);
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn stale_codex_official_queue_entries_are_not_retry_targets() {
-        let _home = TempHome::new();
-        let db = Arc::new(Database::memory().unwrap());
-        let current = Provider::with_id(
-            "third-party".to_string(),
-            "Third Party".to_string(),
-            json!({}),
-            None,
-        );
-        let official = managed_codex_official("official-a", "account-a");
-        let fallback = Provider::with_id(
-            "fallback".to_string(),
-            "Fallback".to_string(),
-            json!({}),
-            None,
-        );
-        db.save_provider("codex", &current).unwrap();
-        db.save_provider("codex", &official).unwrap();
-        db.save_provider("codex", &fallback).unwrap();
-        db.set_current_provider("codex", &current.id).unwrap();
-        db.add_to_failover_queue("codex", &official.id).unwrap();
-        db.add_to_failover_queue("codex", &fallback.id).unwrap();
-
-        let mut config = db.get_proxy_config_for_app("codex").await.unwrap();
-        config.auto_failover_enabled = true;
-        db.update_proxy_config_for_app(config).await.unwrap();
-
-        let providers = ProviderRouter::new(db)
-            .select_providers("codex")
-            .await
-            .unwrap();
-        assert_eq!(
-            providers
-                .iter()
-                .map(|provider| provider.id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["fallback"]
-        );
     }
 
     #[tokio::test]

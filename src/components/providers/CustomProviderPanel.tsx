@@ -17,7 +17,6 @@ type ListCallbacks = Pick<
   | "onDuplicate"
   | "onConfigureUsage"
   | "onOpenWebsite"
-  | "onOpenTerminal"
   | "onCreate"
   | "searchOpen"
   | "onSearchOpenChange"

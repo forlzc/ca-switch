@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -6,14 +6,6 @@ import { FullScreenPanel } from "@/components/common/FullScreenPanel";
 import { APP_DISPLAY_NAME } from "@/components/shell/AppGlyph";
 import type { Provider, CustomEndpoint } from "@/types";
 import type { AppId } from "@/lib/api";
-import { providersApi } from "@/lib/api";
-import type {
-  EditorConflictPolicy,
-  ProviderEditorSave,
-} from "@/lib/api/providers";
-import { useLiveEditConflict } from "@/components/providers/LiveEditConflictDialog";
-import { toastEditorViewFailed } from "@/components/providers/forms/hooks/useDraftEditorProjection";
-import { isPiFamilyApp } from "@/config/appConfig";
 import {
   ProviderForm,
   type ProviderFormValues,
@@ -25,10 +17,7 @@ interface AddProviderDialogProps {
   onOpenChange: (open: boolean) => void;
   appId: AppId;
   onSubmit: (
-    provider: Omit<Provider, "id"> & {
-      providerKey?: string;
-      editorSave?: ProviderEditorSave;
-    },
+    provider: Omit<Provider, "id"> & { providerKey?: string },
   ) => Promise<void> | void;
   /** 兼容旧签名；精简后不再有直连 / 聚合布局。 */
   modeView?: AppMode;
@@ -45,66 +34,10 @@ export function AddProviderDialog({
 }: AddProviderDialogProps) {
   const { t } = useTranslation();
   const [isFormSubmitting, setIsFormSubmitting] = useState(false);
-  const [accountLogin, setAccountLogin] = useState(false);
-
-  // Claude：把自定义配置套在当前 live 上显示，保存时其余部分的改动写进 live。
-  const [claudeLiveBase, setClaudeLiveBase] = useState<Record<
-    string,
-    unknown
-  > | null>(null);
-  const [claudeBaseLoaded, setClaudeBaseLoaded] = useState(false);
-  const { submitWithConflictRetry, conflictDialog } = useLiveEditConflict();
-
-  useEffect(() => {
-    setAccountLogin(false);
-  }, [appId, open]);
-
-  useEffect(() => {
-    if (!open || appId !== "claude") {
-      setClaudeLiveBase(null);
-      setClaudeBaseLoaded(false);
-      return;
-    }
-    let cancelled = false;
-    providersApi
-      .getEditorView(appId, {})
-      .then((view) => {
-        if (!cancelled) setClaudeLiveBase(view.settings);
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) {
-          setClaudeLiveBase(null);
-          toastEditorViewFailed(t, error);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setClaudeBaseLoaded(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, appId, t]);
 
   const closeDialog = useCallback(() => {
     onOpenChange(false);
   }, [onOpenChange]);
-
-  const formReadyToken = useMemo(() => Symbol("provider-form-ready"), [appId, open]);
-  const [formReadyState, setFormReadyState] = useState({
-    token: formReadyToken,
-    ready: !isPiFamilyApp(appId),
-  });
-  const isFormReady =
-    formReadyState.token === formReadyToken
-      ? formReadyState.ready
-      : !isPiFamilyApp(appId);
-
-  const handleSubmitReadyChange = useCallback(
-    (ready: boolean) => {
-      setFormReadyState({ token: formReadyToken, ready });
-    },
-    [formReadyToken],
-  );
 
   const handleSubmit = useCallback(
     async (values: ProviderFormValues) => {
@@ -143,22 +76,13 @@ export function AddProviderDialog({
         };
       }
 
-      const editorBase = claudeLiveBase && { base: claudeLiveBase };
-      const submit = async (onConflict: EditorConflictPolicy) => {
-        await onSubmit({
-          ...providerData,
-          ...(editorBase ? { editorSave: { ...editorBase, onConflict } } : {}),
-        });
-        closeDialog();
-      };
-      await submitWithConflictRetry(submit);
+      await onSubmit(providerData);
+      closeDialog();
     },
-    [onSubmit, closeDialog, claudeLiveBase, submitWithConflictRetry],
+    [onSubmit, closeDialog],
   );
 
-  const waitingForClaudeBase = appId === "claude" && !claudeBaseLoaded;
-
-  const footer = !accountLogin ? (
+  const footer = (
     <>
       <Button
         type="button"
@@ -173,49 +97,33 @@ export function AddProviderDialog({
         form="provider-form"
         variant="solid"
         size="regular"
-        disabled={isFormSubmitting || !isFormReady}
+        disabled={isFormSubmitting}
       >
         {isFormSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
         {t("common.add")}
       </Button>
     </>
-  ) : null;
-
-  const form = (
-    <ProviderForm
-      appId={appId}
-      submitLabel={t("common.add")}
-      onSubmit={handleSubmit}
-      onCancel={closeDialog}
-      onSubmittingChange={setIsFormSubmitting}
-      onSubmitReadyChange={handleSubmitReadyChange}
-      onAccountLoginChange={setAccountLogin}
-      showButtons={false}
-      claudeLiveBase={
-        appId === "claude" ? (claudeLiveBase ?? undefined) : undefined
-      }
-    />
   );
 
   return (
     <FullScreenPanel
       isOpen={open}
-      trackUnsavedChanges={!accountLogin}
+      trackUnsavedChanges
       title={t("provider.addNewProvider")}
       subtitle={APP_DISPLAY_NAME[appId]}
       backLabel={t("provider.backToList")}
       onClose={closeDialog}
       footer={footer}
-      contentClassName={isPiFamilyApp(appId) ? "pb-0 pt-4" : "pt-4"}
+      contentClassName="pt-4"
     >
-      {waitingForClaudeBase ? (
-        <div className="py-12 text-center text-body text-fg-2">
-          {t("common.loading")}
-        </div>
-      ) : (
-        form
-      )}
-      {conflictDialog}
+      <ProviderForm
+        appId={appId}
+        submitLabel={t("common.add")}
+        onSubmit={handleSubmit}
+        onCancel={closeDialog}
+        onSubmittingChange={setIsFormSubmitting}
+        showButtons={false}
+      />
     </FullScreenPanel>
   );
 }

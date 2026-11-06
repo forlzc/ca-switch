@@ -2,7 +2,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   Provider,
-  ProviderMeta,
   UniversalProvider,
   UniversalProvidersMap,
 } from "@/types";
@@ -26,56 +25,10 @@ export interface SwitchResult {
 
 export interface OpenTerminalOptions {
   cwd?: string;
-  /** 启动时跳过权限确认：Claude Code 与 agy 加 `--dangerously-skip-permissions`，Codex 加 `--dangerously-bypass-approvals-and-sandbox` */
+  /** 启动时跳过权限确认 */
   skipPermissions?: boolean;
   /** 追加在生成的参数后面，后端按空白拆分、引号括起的算一个 */
   extraArgs?: string;
-}
-
-export interface ClaudeDesktopStatus {
-  supported: boolean;
-  /** 本机装了 Claude Desktop（按它的数据目录或 macOS 应用包推断；接入了也算） */
-  installed: boolean;
-  configured: boolean;
-  appliedId?: string | null;
-  profilePath?: string | null;
-  configLibraryPath?: string | null;
-  mode?: "direct" | "proxy" | null;
-  expectedBaseUrl?: string | null;
-  actualBaseUrl?: string | null;
-  proxyRunning: boolean;
-  staleRawModels: boolean;
-  missingRouteMappings: boolean;
-  gatewayTokenConfigured: boolean;
-}
-
-/** 编辑器保存时，live 里的键在编辑期间被别的程序改过怎么办。 */
-export type EditorConflictPolicy = "refuse" | "keepMine" | "keepTheirs";
-
-/** 编辑器保存随供应商一起提交：打开时显示的完整配置，用来三方比较。 */
-export interface ProviderEditorSave {
-  base: Record<string, unknown>;
-  /** 新增对话框：投影成 `base` 的那份草稿（预设或模板）。后端按它区分预设带的和从 live 带进来的字段。 */
-  draft?: Record<string, unknown>;
-  onConflict?: EditorConflictPolicy;
-}
-
-/** 行里保存着、但不随切换生效的字段。 */
-export interface ProviderEditorInactiveField {
-  path: string[];
-  value: unknown;
-}
-
-/** 编辑器底部 JSON 的显示内容：切到这个供应商之后配置文件会是什么样。 */
-export interface ProviderEditorView {
-  settings: Record<string, unknown>;
-  inactive: ProviderEditorInactiveField[];
-}
-
-export interface ClaudeDesktopDefaultRoute {
-  routeId: string;
-  envKey: string;
-  supports1m: boolean;
 }
 
 export const providersApi = {
@@ -87,69 +40,24 @@ export const providersApi = {
     return await invoke("get_current_provider", { app: appId });
   },
 
-  async add(
-    provider: Provider,
-    appId: AppId,
-    addToLive?: boolean,
-    editorSave?: ProviderEditorSave,
-  ): Promise<boolean> {
-    return await invoke("add_provider", {
-      provider,
-      app: appId,
-      addToLive,
-      ...(editorSave ? { editorSave } : {}),
-    });
+  async add(provider: Provider, appId: AppId): Promise<boolean> {
+    return await invoke("add_provider", { provider, app: appId });
   },
 
   async update(
     provider: Provider,
     appId: AppId,
     originalId?: string,
-    editorSave?: ProviderEditorSave,
   ): Promise<boolean> {
     return await invoke("update_provider", {
       provider,
       app: appId,
       originalId,
-      ...(editorSave ? { editorSave } : {}),
-    });
-  },
-
-  /**
-   * 切换式应用的编辑器显示内容。编辑已有供应商时传 `providerId`：后端按库里那一行认
-   * 官方卡。`meta` 保留 Codex Copilot 等供应商的认证和协议身份，新增时取当前预设。
-   */
-  async getEditorView(
-    appId: AppId,
-    settingsConfig: Record<string, unknown>,
-    category?: string,
-    providerId?: string,
-    meta?: ProviderMeta,
-  ): Promise<ProviderEditorView> {
-    return await invoke("get_provider_editor_view", {
-      app: appId,
-      settingsConfig,
-      ...(category ? { category } : {}),
-      ...(providerId ? { providerId } : {}),
-      ...(meta ? { meta } : {}),
     });
   },
 
   async delete(id: string, appId: AppId): Promise<boolean> {
     return await invoke("delete_provider", { id, app: appId });
-  },
-
-  /** Kimi「添加」：写进 config.toml 但不改默认模型（「切换」才改） */
-  async addToLiveConfig(id: string, appId: AppId): Promise<boolean> {
-    return await invoke("add_provider_to_live_config", { id, app: appId });
-  },
-
-  /**
-   * Remove provider from live config only (for additive mode apps like OpenCode)
-   * Does NOT delete from database - provider remains in the list
-   */
-  async removeFromLiveConfig(id: string, appId: AppId): Promise<boolean> {
-    return await invoke("remove_provider_from_live_config", { id, app: appId });
   },
 
   async switch(id: string, appId: AppId): Promise<SwitchResult> {
@@ -158,30 +66,6 @@ export const providersApi = {
 
   async importDefault(appId: AppId): Promise<boolean> {
     return await invoke("import_default_config", { app: appId });
-  },
-
-  async importClaudeDesktopFromClaude(): Promise<number> {
-    return await invoke("import_claude_desktop_providers_from_claude");
-  },
-
-  async ensureClaudeDesktopOfficialProvider(): Promise<boolean> {
-    return await invoke("ensure_claude_desktop_official_provider");
-  },
-
-  async ensureCodexOfficialProvider(): Promise<boolean> {
-    return await invoke("ensure_codex_official_provider");
-  },
-
-  async ensureGrokBuildOfficialProvider(): Promise<boolean> {
-    return await invoke("ensure_grokbuild_official_provider");
-  },
-
-  async getClaudeDesktopStatus(): Promise<ClaudeDesktopStatus> {
-    return await invoke("get_claude_desktop_status");
-  },
-
-  async getClaudeDesktopDefaultRoutes(): Promise<ClaudeDesktopDefaultRoute[]> {
-    return await invoke("get_claude_desktop_default_routes");
   },
 
   async updateTrayMenu(): Promise<boolean> {
@@ -222,63 +106,6 @@ export const providersApi = {
       skipPermissions,
       extraArgs,
     });
-  },
-
-  /**
-   * 从 OpenCode live 配置导入供应商到数据库
-   * OpenCode 特有功能：由于累加模式，用户可能已在 opencode.json 中配置供应商
-   */
-  async importOpenCodeFromLive(): Promise<number> {
-    return await invoke("import_opencode_providers_from_live");
-  },
-
-  /**
-   * 获取 OpenCode live 配置中的供应商 ID 列表
-   * 用于前端判断供应商是否已添加到 opencode.json
-   */
-  async getOpenCodeLiveProviderIds(): Promise<string[]> {
-    return await invoke("get_opencode_live_provider_ids");
-  },
-
-  /** OpenCode 顶层 model（`<provider>/<model>`），没写时为 null */
-  async getOpenCodeDefaultModel(): Promise<string | null> {
-    return await invoke("get_opencode_default_model");
-  },
-
-  async setOpenCodeDefaultModel(model: string): Promise<void> {
-    await invoke("set_opencode_default_model", { model });
-  },
-
-  /**
-   * 获取 OpenClaw live 配置中的供应商 ID 列表
-   * 用于前端判断供应商是否已添加到 openclaw.json
-   */
-  async getOpenClawLiveProviderIds(): Promise<string[]> {
-    return await invoke("get_openclaw_live_provider_ids");
-  },
-
-  /**
-   * 获取 Hermes live 配置中的供应商 ID 列表
-   * 用于前端判断供应商是否已添加到 Hermes 配置
-   */
-  async getHermesLiveProviderIds(): Promise<string[]> {
-    return await invoke("get_hermes_live_provider_ids");
-  },
-
-  /**
-   * 从 OpenClaw live 配置导入供应商到数据库
-   * OpenClaw 特有功能：由于累加模式，用户可能已在 openclaw.json 中配置供应商
-   */
-  async importOpenClawFromLive(): Promise<number> {
-    return await invoke("import_openclaw_providers_from_live");
-  },
-
-  /**
-   * 从 Hermes live 配置导入供应商到数据库
-   * Hermes 特有功能：由于累加模式，用户可能已在 Hermes 配置中配置供应商
-   */
-  async importHermesFromLive(): Promise<number> {
-    return await invoke("import_hermes_providers_from_live");
   },
 };
 

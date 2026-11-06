@@ -13,8 +13,6 @@
 //!
 //! apply 为 best-effort：单项失败收集为 warning 继续，不整体回滚。
 
-use std::collections::HashSet;
-
 use serde::{Deserialize, Serialize};
 
 use crate::app_config::AppType;
@@ -24,41 +22,26 @@ use crate::prompt::Prompt;
 use crate::services::{PromptService, ProviderService};
 use crate::store::AppState;
 
-/// Profile 操作的应用分组：项目实体全应用共享，但快照/应用/当前指针按组进行。
-///
-/// Claude Code 与 Claude Desktop 的供应商在 cc-switch 中是独立切换的，
-/// 因此各自拥有独立的项目分组。两者 live 文件零交集
-///（`~/.claude` / `Application Support/Claude-3p`），分组切换互不干扰。
+/// Profile 操作的应用分组：当前只有 Claude 一个分组。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProfileScope {
     Claude,
-    #[serde(rename = "claude-desktop")]
-    ClaudeDesktop,
-    Codex,
 }
 
 impl ProfileScope {
-    /// 全部分组（扩展新分组时同步扩展 apps/for_app 与前端 scope.ts 镜像）
-    pub const ALL: [ProfileScope; 3] = [
-        ProfileScope::Claude,
-        ProfileScope::ClaudeDesktop,
-        ProfileScope::Codex,
-    ];
+    /// 全部分组
+    pub const ALL: [ProfileScope; 1] = [ProfileScope::Claude];
 
     pub fn as_str(&self) -> &'static str {
         match self {
             ProfileScope::Claude => "claude",
-            ProfileScope::ClaudeDesktop => "claude-desktop",
-            ProfileScope::Codex => "codex",
         }
     }
 
     pub fn parse(value: &str) -> Result<Self, AppError> {
         match value {
-            "claude" => Ok(ProfileScope::Claude),
-            "claude-desktop" => Ok(ProfileScope::ClaudeDesktop),
-            "codex" => Ok(ProfileScope::Codex),
+            "claude" | "anthropic" => Ok(ProfileScope::Claude),
             other => Err(AppError::InvalidInput(format!(
                 "Unknown profile scope: {other}"
             ))),
@@ -69,18 +52,13 @@ impl ProfileScope {
     pub fn apps(&self) -> &'static [AppType] {
         match self {
             ProfileScope::Claude => &[AppType::Claude],
-            ProfileScope::ClaudeDesktop => &[AppType::ClaudeDesktop],
-            ProfileScope::Codex => &[AppType::Codex],
         }
     }
 
-    /// 应用页 → 所属分组（Profile 不支持的应用返回 None）
+    /// 应用页 → 所属分组
     pub fn for_app(app: &AppType) -> Option<Self> {
         match app {
             AppType::Claude => Some(ProfileScope::Claude),
-            AppType::ClaudeDesktop => Some(ProfileScope::ClaudeDesktop),
-            AppType::Codex => Some(ProfileScope::Codex),
-            _ => None,
         }
     }
 }
@@ -96,27 +74,18 @@ pub const NO_ACTIVE_PROMPT: &str = "";
 #[serde(default)]
 pub struct PerApp<T> {
     pub claude: T,
-    #[serde(rename = "claude-desktop")]
-    pub claude_desktop: T,
-    pub codex: T,
 }
 
 impl<T> PerApp<T> {
     pub fn get(&self, app: &AppType) -> Option<&T> {
         match app {
             AppType::Claude => Some(&self.claude),
-            AppType::ClaudeDesktop => Some(&self.claude_desktop),
-            AppType::Codex => Some(&self.codex),
-            _ => None,
         }
     }
 
     pub fn get_mut(&mut self, app: &AppType) -> Option<&mut T> {
         match app {
             AppType::Claude => Some(&mut self.claude),
-            AppType::ClaudeDesktop => Some(&mut self.claude_desktop),
-            AppType::Codex => Some(&mut self.codex),
-            _ => None,
         }
     }
 }
@@ -391,195 +360,4 @@ impl ProfileService {
             }
         }
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn ids(v: &[&str]) -> Vec<String> {
-        v.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn test_payload_serde_roundtrip() {
-        let payload = ProfilePayload {
-            providers: PerApp {
-                claude: Some("p1".into()),
-                claude_desktop: Some("d1".into()),
-                codex: None,
-            },
-            prompts: PerApp {
-                claude: None,
-                claude_desktop: None,
-                codex: Some("pr1".into()),
-            },
-        };
-        let json = serde_json::to_string(&payload).unwrap();
-        // per-app key 必须与 AppType 的 serde 形式一致（claude-desktop 是连字符）
-        assert!(json.contains("\"claude\""));
-        assert!(json.contains("\"claude-desktop\""));
-        assert!(json.contains("\"codex\""));
-        let back: ProfilePayload = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, payload);
-    }
-
-    #[test]
-    fn test_payload_tolerates_missing_fields() {
-        // 前向兼容：旧版/部分字段缺失时应落到 None（"该侧未拍过"）而不是报错，
-        // 应用时对缺失槽位不做任何改动。旧版 payload 里的 mcp/skills 键现在被忽略。
-        let back: ProfilePayload =
-            serde_json::from_str(r#"{"providers":{"claude":"p1"},"mcp":{"claude":["m1"]}}"#)
-                .unwrap();
-        assert_eq!(back.providers.claude, Some("p1".to_string()));
-        assert_eq!(back.providers.claude_desktop, None);
-        assert_eq!(back.providers.codex, None);
-        assert_eq!(back.prompts.codex, None);
-
-        let empty: ProfilePayload = serde_json::from_str("{}").unwrap();
-        assert_eq!(empty, ProfilePayload::default());
-    }
-
-    #[test]
-    fn test_merge_scope_from_only_touches_scope_slots() {
-        // 项目 A：两侧都已拍过快照
-        let mut payload = ProfilePayload {
-            providers: PerApp {
-                claude: Some("p1".into()),
-                claude_desktop: Some("d1".into()),
-                codex: Some("c1".into()),
-            },
-            ..Default::default()
-        };
-        // 在 Claude 页"以当前状态更新"：只覆盖 claude 组槽位
-        let fresh = ProfilePayload {
-            providers: PerApp {
-                claude: Some("p2".into()),
-                claude_desktop: None,
-                codex: Some("SHOULD-NOT-LEAK".into()),
-            },
-            ..Default::default()
-        };
-        payload.merge_scope_from(&fresh, ProfileScope::Claude);
-
-        assert_eq!(payload.providers.claude, Some("p2".to_string()));
-        assert_eq!(
-            payload.providers.claude_desktop,
-            Some("d1".to_string()),
-            "claude-desktop slot is in its own scope, untouched by claude merge"
-        );
-        // codex 侧完好：既没被覆盖也没被 fresh 的值污染
-        assert_eq!(payload.providers.codex, Some("c1".to_string()));
-    }
-
-    #[test]
-    fn test_scope_captured_detects_per_scope_snapshot() {
-        let mut payload = ProfilePayload::default();
-        assert!(!payload.scope_captured(ProfileScope::Claude));
-        assert!(!payload.scope_captured(ProfileScope::ClaudeDesktop));
-        assert!(!payload.scope_captured(ProfileScope::Codex));
-
-        // 只拍过 claude 组（哪怕拍到的是空值）
-        payload.prompts.claude = Some(String::new());
-        assert!(payload.scope_captured(ProfileScope::Claude));
-        assert!(!payload.scope_captured(ProfileScope::ClaudeDesktop));
-        assert!(!payload.scope_captured(ProfileScope::Codex));
-
-        // Desktop 槽位属于独立的 claude-desktop 组
-        let mut desktop_only = ProfilePayload::default();
-        desktop_only.providers.claude_desktop = Some("d1".into());
-        assert!(desktop_only.scope_captured(ProfileScope::ClaudeDesktop));
-        assert!(!desktop_only.scope_captured(ProfileScope::Claude));
-    }
-
-    #[test]
-    fn test_per_app_get_only_supports_profile_apps() {
-        let per: PerApp<Option<String>> = PerApp::default();
-        assert!(per.get(&AppType::Claude).is_some());
-        assert!(per.get(&AppType::ClaudeDesktop).is_some());
-        assert!(per.get(&AppType::Codex).is_some());
-        assert!(per.get(&AppType::Gemini).is_none());
-    }
-
-    #[test]
-    fn test_scope_serde_and_parse_roundtrip() {
-        for scope in ProfileScope::ALL {
-            // DB 存储字符串（as_str/parse）与 JSON 序列化必须是同一形式
-            assert_eq!(
-                serde_json::to_string(&scope).unwrap(),
-                format!("\"{}\"", scope.as_str())
-            );
-            assert_eq!(ProfileScope::parse(scope.as_str()).unwrap(), scope);
-        }
-        assert!(ProfileScope::parse("gemini").is_err());
-        assert!(ProfileScope::parse("").is_err());
-    }
-
-    #[test]
-    fn test_scope_app_grouping() {
-        // Claude Code 与 Claude Desktop 各自独立成组；
-        // 组内应用与 for_app 反向映射必须一致
-        assert_eq!(ProfileScope::Claude.apps(), &[AppType::Claude]);
-        assert_eq!(
-            ProfileScope::ClaudeDesktop.apps(),
-            &[AppType::ClaudeDesktop]
-        );
-        assert_eq!(ProfileScope::Codex.apps(), &[AppType::Codex]);
-        for scope in ProfileScope::ALL {
-            for app in scope.apps() {
-                assert_eq!(ProfileScope::for_app(app), Some(scope));
-            }
-        }
-        assert_eq!(ProfileScope::for_app(&AppType::Gemini), None);
-    }
-
-    #[test]
-    fn test_plan_toggles_minimal_diff() {
-        let current = vec![
-            ("a".to_string(), true),  // 目标含 a：不动
-            ("b".to_string(), false), // 目标含 b：开
-            ("c".to_string(), true),  // 目标不含 c：关
-            ("d".to_string(), false), // 目标不含 d：不动
-        ];
-        let (toggles, dangling) = plan_toggles(&current, &ids(&["a", "b", "ghost"]));
-        assert_eq!(
-            toggles,
-            vec![("b".to_string(), true), ("c".to_string(), false)]
-        );
-        assert_eq!(dangling, ids(&["ghost"]));
-    }
-
-    #[test]
-    fn test_plan_toggles_empty_target_disables_all_enabled() {
-        let current = vec![("a".to_string(), true), ("b".to_string(), false)];
-        let (toggles, dangling) = plan_toggles(&current, &[]);
-        assert_eq!(toggles, vec![("a".to_string(), false)]);
-        assert!(dangling.is_empty());
-    }
-}
-
-/// 计算从当前启用状态到目标集合的最小 toggle 集
-///
-/// 返回 (需要执行的 (id, enabled) 列表, payload 中已不存在于 DB 的悬空 id 列表)
-#[allow(dead_code)] // MCP 支持已移除，这些写盘助手目前只被测试引用
-fn plan_toggles(
-    current: &[(String, bool)],
-    target_ids: &[String],
-) -> (Vec<(String, bool)>, Vec<String>) {
-    let existing: HashSet<&str> = current.iter().map(|(id, _)| id.as_str()).collect();
-    let target: HashSet<&str> = target_ids.iter().map(|s| s.as_str()).collect();
-
-    let toggles = current
-        .iter()
-        .filter(|(id, enabled)| target.contains(id.as_str()) != *enabled)
-        .map(|(id, enabled)| (id.clone(), !enabled))
-        .collect();
-
-    let dangling = target_ids
-        .iter()
-        .filter(|id| !existing.contains(id.as_str()))
-        .cloned()
-        .collect();
-
-    (toggles, dangling)
 }

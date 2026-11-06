@@ -225,7 +225,7 @@ pub fn should_convert_codex_responses_to_anthropic(provider: &Provider, endpoint
 /// Covers managed xAI OAuth *and* API-key providers whose live upstream is
 /// `api.x.ai` with `wire_api = "responses"`. See farion1231/cc-switch#6815.
 pub fn provider_needs_responses_namespace_flatten(provider: &Provider) -> bool {
-    provider.is_xai_oauth() || provider_is_xai_native_responses(provider)
+    provider_is_xai_native_responses(provider)
 }
 
 /// True when this Codex provider talks native Responses to first-party xAI
@@ -270,21 +270,16 @@ fn has_explicit_codex_third_party_upstream(provider: &Provider) -> bool {
         .settings_config
         .get("config")
         .and_then(JsonValue::as_str)
-        .map(|text| {
-            crate::codex_config::strip_codex_unified_session_bucket(text)
-                .unwrap_or_else(|_| text.to_string())
-        });
+        .map(|text| text.to_string());
     let config = config.as_deref();
 
     ["baseUrl", "baseURL", "base_url"]
         .into_iter()
         .any(non_empty_setting)
         || config
-            .and_then(crate::codex_config::extract_codex_experimental_bearer_token)
+            .and_then(extract_codex_experimental_bearer_token)
             .is_some()
-        || config
-            .and_then(crate::codex_config::extract_codex_base_url)
-            .is_some()
+        || config.and_then(extract_codex_base_url_from_toml).is_some()
         || config
             .and_then(|text| text.parse::<TomlValue>().ok())
             .and_then(|doc| {
@@ -324,15 +319,6 @@ pub fn is_codex_official_provider(provider: &Provider) -> bool {
 
     if has_explicit_codex_third_party_upstream(provider) {
         return false;
-    }
-
-    let has_managed_account = provider
-        .meta
-        .as_ref()
-        .and_then(|meta| meta.managed_account_id_for("codex_oauth"))
-        .is_some_and(|account_id| !account_id.trim().is_empty());
-    if has_managed_account {
-        return true;
     }
 
     let has_stored_api_key = provider
@@ -379,7 +365,7 @@ const CODEX_NATIVE_RESPONSES_CHAT_PATH_MARKERS: &[&str] = &["/paas/v4"];
 /// provider whose stored `apiFormat` predates the preset's switch to
 /// `openai_responses` still gets the `NativeResponses` catalog without a re-save.
 pub fn is_codex_native_responses_url(base_url: &str) -> bool {
-    if !crate::codex_config::codex_url_host_matches_any(base_url, CODEX_NATIVE_RESPONSES_HOSTS) {
+    if !codex_url_host_matches_any(base_url, CODEX_NATIVE_RESPONSES_HOSTS) {
         return false;
     }
     if is_chat_completions_url(base_url) {
@@ -405,11 +391,7 @@ pub fn codex_provider_upstream_model(provider: &Provider) -> Option<String> {
                 .settings_config
                 .get("config")
                 .and_then(|v| v.as_str())
-                .and_then(|config| {
-                    crate::grok_config::extract_model_config(config)
-                        .map(|model| model.model)
-                        .or_else(|| extract_codex_model_from_toml(config))
-                })
+                .and_then(extract_codex_model_from_toml)
         })
 }
 
@@ -812,9 +794,55 @@ fn extract_codex_model_from_toml(config_text: &str) -> Option<String> {
 }
 
 fn extract_codex_base_url_from_toml(config_text: &str) -> Option<String> {
-    // Canonical parser lives in codex_config; keep this thin alias so the
-    // proxy hot path and the usage-credential resolver share one implementation.
-    crate::codex_config::extract_codex_base_url(config_text)
+    let doc = config_text.parse::<TomlValue>().ok()?;
+    if let Some(url) = doc
+        .get("openai_base_url")
+        .and_then(TomlValue::as_str)
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+    {
+        return Some(url.to_string());
+    }
+
+    let provider_id = doc
+        .get("model_provider")
+        .and_then(TomlValue::as_str)?
+        .trim();
+    doc.get("model_providers")?
+        .get(provider_id)?
+        .get("base_url")?
+        .as_str()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(str::to_string)
+}
+
+fn extract_codex_experimental_bearer_token(config_text: &str) -> Option<String> {
+    let doc = config_text.parse::<TomlValue>().ok()?;
+    doc.get("experimental_bearer_token")
+        .and_then(TomlValue::as_str)
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
+}
+
+fn extract_codex_auth_api_key(auth: &JsonValue) -> Option<String> {
+    auth.get("OPENAI_API_KEY")
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(str::to_string)
+}
+
+fn codex_url_host_matches_any(base_url: &str, hosts: &[&str]) -> bool {
+    let Ok(url) = url::Url::parse(base_url) else {
+        return false;
+    };
+    url.host_str().is_some_and(|host| {
+        hosts
+            .iter()
+            .any(|candidate| host == *candidate || host.ends_with(&format!(".{candidate}")))
+    })
 }
 
 impl CodexAdapter {
@@ -838,8 +866,8 @@ impl CodexAdapter {
 
         // 2. 尝试从 auth 中获取 (Codex CLI 格式)
         if let Some(auth) = provider.settings_config.get("auth") {
-            if let Some(key) = crate::codex_config::extract_codex_auth_api_key(auth) {
-                return Some(key.to_string());
+            if let Some(key) = extract_codex_auth_api_key(auth) {
+                return Some(key);
             }
         }
 
@@ -868,12 +896,7 @@ impl CodexAdapter {
             }
 
             if let Some(config_str) = config.as_str() {
-                if let Some((_, key)) = crate::grok_config::extract_credentials(config_str) {
-                    return Some(key);
-                }
-                if let Some(key) =
-                    crate::codex_config::extract_codex_experimental_bearer_token(config_str)
-                {
+                if let Some(key) = extract_codex_experimental_bearer_token(config_str) {
                     return Some(key);
                 }
             }
@@ -895,20 +918,6 @@ impl ProviderAdapter for CodexAdapter {
     }
 
     fn extract_base_url(&self, provider: &Provider) -> Result<String, ProxyError> {
-        if is_codex_official_provider(provider) {
-            return Ok(super::CHATGPT_CODEX_BASE_URL.to_string());
-        }
-
-        if provider.is_github_copilot() {
-            return Ok("https://api.githubcopilot.com".to_string());
-        }
-
-        // xAI OAuth: ignore editable provider base URLs and always use the xAI
-        // API origin associated with the managed token.
-        if provider.is_xai_oauth() {
-            return Ok(super::XAI_API_BASE_URL.to_string());
-        }
-
         // 1. 尝试直接获取 base_url 字段
         if let Some(url) = provider
             .settings_config
@@ -935,9 +944,6 @@ impl ProviderAdapter for CodexAdapter {
 
             // 尝试解析 TOML 字符串格式
             if let Some(config_str) = config.as_str() {
-                if let Some(url) = crate::grok_config::extract_base_url(config_str) {
-                    return Ok(url.trim_end_matches('/').to_string());
-                }
                 // The table `model_provider` selects, read the way Codex reads it. The text
                 // scans below remain for a top-level `openai_base_url` and for TOML that
                 // does not parse.
@@ -965,22 +971,6 @@ impl ProviderAdapter for CodexAdapter {
     }
 
     fn extract_auth(&self, provider: &Provider) -> Option<AuthInfo> {
-        if provider.is_github_copilot() {
-            return Some(AuthInfo::new(
-                "copilot_placeholder".to_string(),
-                AuthStrategy::GitHubCopilot,
-            ));
-        }
-
-        // xAI OAuth (Grok subscription): placeholder credentials only; the real
-        // access_token is resolved per-request by the forwarder via XaiOAuthManager.
-        if provider.is_xai_oauth() {
-            return Some(AuthInfo::new(
-                "xai_oauth_placeholder".to_string(),
-                AuthStrategy::XaiOAuth,
-            ));
-        }
-
         // Anthropic upstream: the auth field is chosen by the user in the UI (meta.apiKeyField).
         //   ANTHROPIC_API_KEY    → x-api-key (AuthStrategy::Anthropic)
         //   ANTHROPIC_AUTH_TOKEN → Authorization: Bearer (default, AuthStrategy::Bearer)
@@ -1042,9 +1032,6 @@ impl ProviderAdapter for CodexAdapter {
         auth: &AuthInfo,
     ) -> Result<Vec<(http::HeaderName, http::HeaderValue)>, ProxyError> {
         use super::adapter::auth_header_value;
-        if auth.strategy == AuthStrategy::GitHubCopilot {
-            return super::copilot_auth::build_copilot_request_headers(&auth.api_key);
-        }
         let bearer = format!("Bearer {}", auth.api_key);
         // Anthropic gateway: send only x-api-key (anthropic-version is filled in by
         // the forwarder). Mutually exclusive with Bearer to avoid a 401 from the
@@ -1059,1132 +1046,5 @@ impl ProviderAdapter for CodexAdapter {
             http::HeaderName::from_static("authorization"),
             auth_header_value(&bearer)?,
         )])
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::provider::ProviderMeta;
-    use serde_json::json;
-
-    fn create_provider(config: serde_json::Value) -> Provider {
-        Provider {
-            id: "test".to_string(),
-            name: "Test Codex".to_string(),
-            settings_config: config,
-            website_url: None,
-            category: Some("codex".to_string()),
-            created_at: None,
-            sort_index: None,
-            notes: None,
-            meta: None,
-            icon: None,
-            icon_color: None,
-            in_failover_queue: false,
-        }
-    }
-
-    fn create_copilot_provider() -> Provider {
-        let mut provider = create_provider(json!({}));
-        provider.meta = Some(ProviderMeta {
-            provider_type: Some("github_copilot".to_string()),
-            ..ProviderMeta::default()
-        });
-        provider
-    }
-
-    #[test]
-    fn codex_adapter_uses_managed_copilot_auth_and_endpoint() {
-        let adapter = CodexAdapter::new();
-        let provider = create_copilot_provider();
-
-        assert_eq!(
-            adapter.extract_base_url(&provider).unwrap(),
-            "https://api.githubcopilot.com"
-        );
-        let auth = adapter.extract_auth(&provider).unwrap();
-        assert_eq!(auth.strategy, AuthStrategy::GitHubCopilot);
-        let headers = adapter.get_auth_headers(&auth).unwrap();
-        assert!(headers
-            .iter()
-            .any(|(name, _)| name.as_str() == "copilot-integration-id"));
-    }
-    #[test]
-    fn codex_responses_endpoint_detection_ignores_query() {
-        assert!(is_codex_responses_endpoint("/responses"));
-        assert!(is_codex_responses_endpoint(
-            "/v1/responses/compact?client_version=0.149"
-        ));
-        assert!(!is_codex_responses_endpoint("/alpha/search"));
-    }
-
-    #[test]
-    fn grok_build_toml_exposes_upstream_credentials_and_model() {
-        let adapter = CodexAdapter::new();
-        let provider = create_provider(json!({
-            "config": r#"
-[models]
-default = "grok-4.5"
-
-[model."grok-4.5"]
-model = "upstream-grok-model"
-base_url = "https://relay.example.com/v1/"
-name = "Example Relay"
-api_key = "grok-secret"
-api_backend = "responses"
-context_window = 500000
-"#
-        }));
-
-        assert_eq!(
-            adapter.extract_base_url(&provider).unwrap(),
-            "https://relay.example.com/v1"
-        );
-        let auth = adapter.extract_auth(&provider).unwrap();
-        assert_eq!(auth.api_key, "grok-secret");
-        assert_eq!(auth.strategy, AuthStrategy::Bearer);
-        assert_eq!(
-            codex_provider_upstream_model(&provider).as_deref(),
-            Some("upstream-grok-model")
-        );
-    }
-
-    #[test]
-    fn explicit_codex_official_cards_use_chatgpt_backend() {
-        let mut provider = create_provider(json!({
-            "auth": {
-                "auth_mode": "chatgpt",
-                "OPENAI_API_KEY": null,
-                "tokens": { "refresh_token": "legacy-live-only-token" }
-            },
-            "config": ""
-        }));
-        provider.id = "unbound-official-account".to_string();
-        provider.category = Some("official".to_string());
-        assert!(is_codex_official_provider(&provider));
-
-        let mut native = provider.clone();
-        native.id = crate::database::CODEX_OFFICIAL_PROVIDER_ID.to_string();
-        assert!(is_codex_official_provider(&native));
-
-        provider.id = "managed-official-account".to_string();
-        provider.meta = Some(crate::provider::ProviderMeta {
-            provider_type: Some("codex_oauth".to_string()),
-            auth_binding: Some(crate::provider::AuthBinding {
-                source: crate::provider::AuthBindingSource::ManagedAccount,
-                auth_provider: Some("codex_oauth".to_string()),
-                account_id: Some("acct-managed".to_string()),
-            }),
-            ..Default::default()
-        });
-        let adapter = CodexAdapter::new();
-
-        assert!(is_codex_official_provider(&provider));
-        assert_eq!(
-            adapter
-                .extract_base_url(&provider)
-                .expect("official base url"),
-            "https://chatgpt.com/backend-api/codex"
-        );
-        assert!(adapter.extract_auth(&provider).is_none());
-        assert_eq!(
-            adapter.build_url(
-                "https://chatgpt.com/backend-api/codex",
-                "/responses/compact"
-            ),
-            "https://chatgpt.com/backend-api/codex/responses/compact"
-        );
-
-        let mut official_api_key = create_provider(json!({
-            "auth": { "OPENAI_API_KEY": "sk-official" },
-            "config": ""
-        }));
-        official_api_key.category = Some("official".to_string());
-        assert!(!is_codex_official_provider(&official_api_key));
-
-        let mut stored_bearer = create_provider(json!({
-            "auth": {},
-            "config": "experimental_bearer_token = \"sk-legacy\""
-        }));
-        stored_bearer.category = Some("official".to_string());
-        assert!(!is_codex_official_provider(&stored_bearer));
-
-        let mut unmarked_custom = create_provider(json!({
-            "auth": {},
-            "config": "model_provider = \"custom\"\n[model_providers.custom]\nbase_url = \"https://example.com/v1\""
-        }));
-        unmarked_custom.category = Some("official".to_string());
-        assert!(!is_codex_official_provider(&unmarked_custom));
-
-        let mut category_less_fixed_custom = unmarked_custom.clone();
-        category_less_fixed_custom.id = crate::database::CODEX_OFFICIAL_PROVIDER_ID.to_string();
-        category_less_fixed_custom.category = None;
-        assert!(!is_codex_official_provider(&category_less_fixed_custom));
-
-        let mut category_less_fixed_api_key = official_api_key.clone();
-        category_less_fixed_api_key.id = crate::database::CODEX_OFFICIAL_PROVIDER_ID.to_string();
-        category_less_fixed_api_key.category = None;
-        assert!(!is_codex_official_provider(&category_less_fixed_api_key));
-
-        let mut explicit_openai = create_provider(json!({
-            "auth": { "OPENAI_API_KEY": "sk-official" },
-            "config": "model_provider = \"openai\""
-        }));
-        explicit_openai.category = Some("official".to_string());
-        assert!(!is_codex_official_provider(&explicit_openai));
-
-        let mut managed_with_null_config = provider.clone();
-        managed_with_null_config.category = None;
-        managed_with_null_config.settings_config["config"] = JsonValue::Null;
-        assert!(is_codex_official_provider(&managed_with_null_config));
-
-        let mut unified_session = create_provider(json!({
-            "auth": {},
-            // 旧版「统一会话历史」注入进 live、又被回填进行里的形态。
-            "config": "model_provider = \"custom\"\n\n[model_providers.custom]\nname = \"OpenAI\"\nrequires_openai_auth = true\nsupports_websockets = true\nwire_api = \"responses\"\n"
-        }));
-        unified_session.category = Some("official".to_string());
-        assert!(is_codex_official_provider(&unified_session));
-
-        let mut implicit_custom = create_provider(json!({
-            "auth": {},
-            "config": "model_provider = \"ollama\""
-        }));
-        implicit_custom.category = Some("official".to_string());
-        assert!(!is_codex_official_provider(&implicit_custom));
-
-        let mut grok_official = create_provider(json!({ "config": "" }));
-        grok_official.id = crate::database::GROKBUILD_OFFICIAL_PROVIDER_ID.to_string();
-        grok_official.category = Some("official".to_string());
-        assert!(!is_codex_official_provider(&grok_official));
-    }
-
-    #[test]
-    fn prompt_cache_routing_auto_enables_known_upstreams_only() {
-        let kimi = create_provider(json!({
-            "config": r#"
-model_provider = "custom"
-[model_providers.custom]
-base_url = "https://api.kimi.com/coding/v1"
-wire_api = "responses"
-"#
-        }));
-        let openai = create_provider(json!({
-            "base_url": "https://api.openai.com/v1"
-        }));
-        let unknown = create_provider(json!({
-            "base_url": "https://strict.example.com/v1"
-        }));
-
-        assert!(should_send_codex_chat_prompt_cache_key(&kimi));
-        assert!(should_send_codex_chat_prompt_cache_key(&openai));
-        assert!(!should_send_codex_chat_prompt_cache_key(&unknown));
-    }
-
-    #[test]
-    fn prompt_cache_routing_user_override_wins_over_auto_detection() {
-        let mut kimi = create_provider(json!({
-            "base_url": "https://api.kimi.com/coding/v1"
-        }));
-        kimi.meta = Some(crate::provider::ProviderMeta {
-            prompt_cache_routing: Some("disabled".to_string()),
-            ..Default::default()
-        });
-        assert!(!should_send_codex_chat_prompt_cache_key(&kimi));
-
-        let mut unknown = create_provider(json!({
-            "base_url": "https://strict.example.com/v1"
-        }));
-        unknown.meta = Some(crate::provider::ProviderMeta {
-            prompt_cache_routing: Some("enabled".to_string()),
-            ..Default::default()
-        });
-        assert!(should_send_codex_chat_prompt_cache_key(&unknown));
-    }
-
-    #[test]
-    fn prompt_cache_key_prefers_explicit_key_then_real_session() {
-        let provider = create_provider(json!({
-            "base_url": "https://api.kimi.com/coding/v1"
-        }));
-        let mut explicit_body = json!({ "model": "kimi-for-coding" });
-        assert!(inject_codex_chat_prompt_cache_key(
-            &provider,
-            &mut explicit_body,
-            Some("request-key"),
-            Some("session-key"),
-        ));
-        assert_eq!(explicit_body["prompt_cache_key"], "request-key");
-
-        let mut session_body = json!({ "model": "kimi-for-coding" });
-        assert!(inject_codex_chat_prompt_cache_key(
-            &provider,
-            &mut session_body,
-            None,
-            Some("session-key"),
-        ));
-        assert_eq!(session_body["prompt_cache_key"], "session-key");
-    }
-
-    #[test]
-    fn prompt_cache_key_is_not_injected_without_real_session_or_support() {
-        let kimi = create_provider(json!({
-            "base_url": "https://api.kimi.com/coding/v1"
-        }));
-        let mut no_session_body = json!({ "model": "kimi-for-coding" });
-        assert!(!inject_codex_chat_prompt_cache_key(
-            &kimi,
-            &mut no_session_body,
-            None,
-            None,
-        ));
-        assert!(no_session_body.get("prompt_cache_key").is_none());
-
-        let unknown = create_provider(json!({
-            "base_url": "https://strict.example.com/v1"
-        }));
-        let mut unsupported_body = json!({ "model": "other" });
-        assert!(!inject_codex_chat_prompt_cache_key(
-            &unknown,
-            &mut unsupported_body,
-            Some("request-key"),
-            Some("session-key"),
-        ));
-        assert!(unsupported_body.get("prompt_cache_key").is_none());
-    }
-
-    #[test]
-    fn test_extract_base_url_direct() {
-        let adapter = CodexAdapter::new();
-        let provider = create_provider(json!({
-            "base_url": "https://api.openai.com/v1"
-        }));
-
-        let url = adapter.extract_base_url(&provider).unwrap();
-        assert_eq!(url, "https://api.openai.com/v1");
-    }
-
-    #[test]
-    fn test_extract_base_url_from_selected_config_provider() {
-        let adapter = CodexAdapter::new();
-        let configs = [
-            // Another provider table comes first.
-            r#"model_provider = "relay"
-
-[model_providers.azure]
-name = "Azure"
-base_url = "https://azure.example.com/v1"
-env_key = "AZURE_OPENAI_API_KEY"
-
-[model_providers.relay]
-name = "Relay"
-base_url = "https://relay.example.com/v1"
-"#,
-            // The previous URL is commented out above the current one.
-            r#"model_provider = "relay"
-
-[model_providers.relay]
-name = "Relay"
-# base_url = "https://old-relay.example.com/v1"
-base_url = "https://relay.example.com/v1"
-"#,
-            // No spaces around `=`.
-            r#"model_provider = "relay"
-
-[model_providers.relay]
-name = "Relay"
-base_url="https://relay.example.com/v1/"
-"#,
-        ];
-
-        for config in configs {
-            let provider = create_provider(json!({ "config": config }));
-            assert_eq!(
-                adapter.extract_base_url(&provider).unwrap(),
-                "https://relay.example.com/v1",
-                "config:\n{config}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_extract_auth_from_auth_field() {
-        let adapter = CodexAdapter::new();
-        let provider = create_provider(json!({
-            "auth": {
-                "OPENAI_API_KEY": "sk-test-key-12345678"
-            }
-        }));
-
-        let auth = adapter.extract_auth(&provider).unwrap();
-        assert_eq!(auth.api_key, "sk-test-key-12345678");
-        assert_eq!(auth.strategy, AuthStrategy::Bearer);
-    }
-
-    #[test]
-    fn test_extract_auth_falls_back_to_config_bearer_when_auth_key_empty() {
-        let adapter = CodexAdapter::new();
-        let provider = create_provider(json!({
-            "auth": {
-                "OPENAI_API_KEY": ""
-            },
-            "config": r#"model_provider = "custom"
-
-[model_providers.custom]
-experimental_bearer_token = "sk-config-key"
-"#
-        }));
-
-        let auth = adapter.extract_auth(&provider).unwrap();
-        assert_eq!(auth.api_key, "sk-config-key");
-        assert_eq!(auth.strategy, AuthStrategy::Bearer);
-    }
-
-    #[test]
-    fn test_extract_auth_from_env() {
-        let adapter = CodexAdapter::new();
-        let provider = create_provider(json!({
-            "env": {
-                "OPENAI_API_KEY": "sk-env-key-12345678"
-            }
-        }));
-
-        let auth = adapter.extract_auth(&provider).unwrap();
-        assert_eq!(auth.api_key, "sk-env-key-12345678");
-    }
-
-    #[test]
-    fn test_build_url() {
-        let adapter = CodexAdapter::new();
-        let url = adapter.build_url("https://api.openai.com/v1", "/responses");
-        assert_eq!(url, "https://api.openai.com/v1/responses");
-    }
-
-    // ==================== anthropic upstream detection ====================
-
-    #[test]
-    fn test_uses_anthropic_from_settings_api_format() {
-        let provider = create_provider(json!({ "apiFormat": "anthropic" }));
-        assert!(codex_provider_uses_anthropic(&provider));
-
-        let provider = create_provider(json!({ "api_format": "anthropic_messages" }));
-        assert!(codex_provider_uses_anthropic(&provider));
-    }
-
-    #[test]
-    fn test_uses_anthropic_from_meta_api_format() {
-        let mut provider = create_provider(json!({}));
-        provider.meta = Some(crate::provider::ProviderMeta {
-            api_format: Some("anthropic".to_string()),
-            ..Default::default()
-        });
-        assert!(codex_provider_uses_anthropic(&provider));
-    }
-
-    #[test]
-    fn test_uses_anthropic_from_toml_wire_api() {
-        let provider = create_provider(json!({
-            "config": r#"model_provider = "custom"
-
-[model_providers.custom]
-wire_api = "anthropic"
-"#
-        }));
-        assert!(codex_provider_uses_anthropic(&provider));
-    }
-
-    #[test]
-    fn test_anthropic_false_for_chat_and_responses() {
-        let chat = create_provider(json!({ "apiFormat": "openai_chat" }));
-        assert!(!codex_provider_uses_anthropic(&chat));
-        let responses = create_provider(json!({ "apiFormat": "openai_responses" }));
-        assert!(!codex_provider_uses_anthropic(&responses));
-    }
-
-    #[test]
-    fn test_anthropic_and_chat_are_mutually_exclusive() {
-        let anth = create_provider(json!({ "apiFormat": "anthropic" }));
-        assert!(codex_provider_uses_anthropic(&anth));
-        assert!(!codex_provider_uses_chat_completions(&anth));
-
-        let chat = create_provider(json!({ "apiFormat": "openai_chat" }));
-        assert!(codex_provider_uses_chat_completions(&chat));
-        assert!(!codex_provider_uses_anthropic(&chat));
-    }
-
-    #[test]
-    fn test_should_convert_responses_to_anthropic_path_guard() {
-        let provider = create_provider(json!({ "apiFormat": "anthropic" }));
-        assert!(should_convert_codex_responses_to_anthropic(
-            &provider,
-            "/responses"
-        ));
-        assert!(should_convert_codex_responses_to_anthropic(
-            &provider,
-            "/v1/responses/compact"
-        ));
-        assert!(should_convert_codex_responses_to_anthropic(
-            &provider,
-            "/responses?x=1"
-        ));
-        assert!(!should_convert_codex_responses_to_anthropic(
-            &provider,
-            "/chat/completions"
-        ));
-    }
-
-
-
-    #[test]
-    fn test_apply_codex_upstream_model_preserves_one_m_catalog_model() {
-        // Regression for the [1m] path: a request model carrying the [1m] marker must
-        // match its catalog entry and be preserved (not overridden by the provider
-        // default) so the transform can later strip [1m] and emit the context-1m beta.
-        // This only works because the forwarder no longer strips [1m] before this call
-        // on the Anthropic path.
-        let provider = create_provider(json!({
-            "config": r#"model_provider = "custom"
-model = "claude-opus-4-1"
-
-[model_providers.custom]
-wire_api = "anthropic"
-"#,
-            "modelCatalog": {
-                "models": [
-                    { "model": "claude-opus-4-1[1m]" }
-                ]
-            }
-        }));
-        let mut body = json!({ "model": "claude-opus-4-1[1m]", "input": "hi" });
-        let result = apply_codex_upstream_model(&provider, &mut body);
-        assert_eq!(result.as_deref(), Some("claude-opus-4-1[1m]"));
-        assert_eq!(
-            body.get("model").and_then(|v| v.as_str()),
-            Some("claude-opus-4-1[1m]")
-        );
-    }
-
-    #[test]
-    fn test_anthropic_auth_defaults_to_bearer() {
-        // No meta.apiKeyField (defaults to ANTHROPIC_AUTH_TOKEN) → Authorization: Bearer only
-        let adapter = CodexAdapter::new();
-        let provider = create_provider(json!({
-            "apiFormat": "anthropic",
-            "auth": { "OPENAI_API_KEY": "sk-anthropic-key-123" }
-        }));
-
-        let auth = adapter.extract_auth(&provider).unwrap();
-        assert_eq!(auth.strategy, AuthStrategy::Bearer);
-
-        let headers = adapter.get_auth_headers(&auth).unwrap();
-        let names: Vec<String> = headers
-            .iter()
-            .map(|(name, _)| name.as_str().to_string())
-            .collect();
-        assert_eq!(names, vec!["authorization".to_string()]);
-    }
-
-    #[test]
-    fn test_anthropic_auth_x_api_key_when_selected() {
-        // meta.apiKeyField = ANTHROPIC_API_KEY → x-api-key only
-        let adapter = CodexAdapter::new();
-        let mut provider = create_provider(json!({
-            "apiFormat": "anthropic",
-            "auth": { "OPENAI_API_KEY": "sk-anthropic-key-123" }
-        }));
-        provider.meta = Some(crate::provider::ProviderMeta {
-            api_format: Some("anthropic".to_string()),
-            api_key_field: Some("ANTHROPIC_API_KEY".to_string()),
-            ..Default::default()
-        });
-
-        let auth = adapter.extract_auth(&provider).unwrap();
-        assert_eq!(auth.strategy, AuthStrategy::Anthropic);
-
-        let headers = adapter.get_auth_headers(&auth).unwrap();
-        let names: Vec<String> = headers
-            .iter()
-            .map(|(name, _)| name.as_str().to_string())
-            .collect();
-        assert_eq!(names, vec!["x-api-key".to_string()]);
-    }
-
-    #[test]
-    fn test_build_url_origin_adds_v1() {
-        let adapter = CodexAdapter::new();
-        let url = adapter.build_url("https://api.openai.com", "/responses");
-        assert_eq!(url, "https://api.openai.com/v1/responses");
-    }
-
-    #[test]
-    fn test_build_url_custom_prefix_no_v1() {
-        let adapter = CodexAdapter::new();
-        let url = adapter.build_url("https://example.com/openai", "/responses");
-        assert_eq!(url, "https://example.com/openai/responses");
-    }
-
-    #[test]
-    fn test_build_url_dedup_v1() {
-        let adapter = CodexAdapter::new();
-        // base_url 已包含 /v1，endpoint 也包含 /v1
-        let url = adapter.build_url("https://www.packyapi.com/v1", "/v1/responses");
-        assert_eq!(url, "https://www.packyapi.com/v1/responses");
-    }
-
-    #[test]
-    fn test_codex_provider_uses_chat_completions_from_active_wire_api() {
-        let provider = create_provider(json!({
-            "config": r#"
-model_provider = "chat_only"
-model = "gpt-5"
-
-[model_providers.chat_only]
-name = "Chat Only"
-base_url = "https://example.com/v1"
-wire_api = "chat"
-"#
-        }));
-
-        assert!(codex_provider_uses_chat_completions(&provider));
-        assert!(should_convert_codex_responses_to_chat(
-            &provider,
-            "/responses?stream=true"
-        ));
-        assert!(!should_convert_codex_responses_to_chat(
-            &provider,
-            "/chat/completions"
-        ));
-    }
-
-    #[test]
-    fn test_codex_provider_uses_chat_completions_from_full_chat_url() {
-        let provider = create_provider(json!({
-            "base_url": "https://example.com/v1/chat/completions"
-        }));
-
-        assert!(codex_provider_uses_chat_completions(&provider));
-        assert!(should_convert_codex_responses_to_chat(
-            &provider,
-            "/v1/responses/compact"
-        ));
-    }
-
-    #[test]
-    fn test_codex_provider_uses_chat_completions_from_meta_api_format_for_compact() {
-        let mut provider = create_provider(json!({
-            "base_url": "https://example.com/v1"
-        }));
-        provider.meta = Some(crate::provider::ProviderMeta {
-            api_format: Some("openai_chat".to_string()),
-            ..Default::default()
-        });
-
-        assert!(codex_provider_uses_chat_completions(&provider));
-        assert!(should_convert_codex_responses_to_chat(
-            &provider,
-            "/responses/compact?stream=true"
-        ));
-    }
-
-    #[test]
-    fn test_codex_provider_uses_chat_completions_from_meta_api_format_for_responses() {
-        let mut provider = create_provider(json!({
-            "base_url": "https://api.deepseek.com/v1"
-        }));
-        provider.meta = Some(crate::provider::ProviderMeta {
-            api_format: Some("openai_chat".to_string()),
-            ..Default::default()
-        });
-
-        assert!(should_convert_codex_responses_to_chat(
-            &provider,
-            "/v1/responses"
-        ));
-    }
-
-    #[test]
-    fn test_apply_codex_chat_upstream_model_uses_provider_config_model() {
-        let mut provider = create_provider(json!({
-            "config": r#"
-model_provider = "deepseek"
-model = "deepseek-v4-flash"
-
-[model_providers.deepseek]
-name = "DeepSeek"
-base_url = "https://api.deepseek.com/v1"
-wire_api = "responses"
-"#
-        }));
-        provider.meta = Some(crate::provider::ProviderMeta {
-            api_format: Some("openai_chat".to_string()),
-            ..Default::default()
-        });
-        let mut body = json!({
-            "model": "placeholder-client-model",
-            "input": "ping"
-        });
-
-        let upstream_model = apply_codex_chat_upstream_model(&provider, &mut body);
-
-        assert_eq!(upstream_model.as_deref(), Some("deepseek-v4-flash"));
-        assert_eq!(
-            body.get("model").and_then(|v| v.as_str()),
-            Some("deepseek-v4-flash")
-        );
-    }
-
-    #[test]
-    fn test_apply_codex_chat_upstream_model_preserves_catalog_model_selection() {
-        let mut provider = create_provider(json!({
-            "config": r#"
-model_provider = "deepseek"
-model = "deepseek-v4-flash"
-
-[model_providers.deepseek]
-name = "DeepSeek"
-base_url = "https://api.deepseek.com/v1"
-wire_api = "responses"
-"#,
-            "modelCatalog": {
-                "models": [
-                    { "model": "deepseek-v4-flash" },
-                    { "model": "kimi-k2" }
-                ]
-            }
-        }));
-        provider.meta = Some(crate::provider::ProviderMeta {
-            api_format: Some("openai_chat".to_string()),
-            ..Default::default()
-        });
-        let mut body = json!({
-            "model": "kimi-k2",
-            "input": "ping"
-        });
-
-        let upstream_model = apply_codex_chat_upstream_model(&provider, &mut body);
-
-        assert_eq!(upstream_model.as_deref(), Some("kimi-k2"));
-        assert_eq!(body.get("model").and_then(|v| v.as_str()), Some("kimi-k2"));
-    }
-
-    #[test]
-    fn test_resolve_codex_chat_reasoning_infers_deepseek_effort_support() {
-        let provider = create_provider(json!({
-            "config": r#"
-model_provider = "deepseek"
-model = "deepseek-v4-pro"
-
-[model_providers.deepseek]
-name = "DeepSeek"
-base_url = "https://api.deepseek.com"
-wire_api = "chat"
-"#
-        }));
-
-        let config =
-            resolve_codex_chat_reasoning_config(&provider, &json!({ "model": "deepseek-v4-pro" }))
-                .unwrap();
-
-        assert_eq!(config.supports_thinking, Some(true));
-        assert_eq!(config.supports_effort, Some(true));
-        assert_eq!(config.effort_value_mode.as_deref(), Some("deepseek"));
-    }
-
-    #[test]
-    fn test_resolve_codex_chat_reasoning_explicit_meta_overrides_inference() {
-        let mut provider = create_provider(json!({
-            "config": r#"
-model_provider = "deepseek"
-model = "deepseek-v4-pro"
-
-[model_providers.deepseek]
-name = "DeepSeek"
-base_url = "https://api.deepseek.com"
-wire_api = "chat"
-"#
-        }));
-        provider.meta = Some(crate::provider::ProviderMeta {
-            codex_chat_reasoning: Some(CodexChatReasoningConfig {
-                supports_thinking: Some(false),
-                supports_effort: Some(false),
-                thinking_param: Some("none".to_string()),
-                effort_param: Some("none".to_string()),
-                effort_value_mode: None,
-                output_format: Some("auto".to_string()),
-                effort_levels: None,
-            }),
-            ..Default::default()
-        });
-
-        let config =
-            resolve_codex_chat_reasoning_config(&provider, &json!({ "model": "deepseek-v4-pro" }))
-                .unwrap();
-
-        assert_eq!(config.supports_thinking, Some(false));
-        assert_eq!(config.supports_effort, Some(false));
-        assert_eq!(config.thinking_param.as_deref(), Some("none"));
-        assert_eq!(config.effort_param.as_deref(), Some("none"));
-    }
-
-    #[test]
-    fn test_resolve_codex_chat_reasoning_repairs_enabled_none_effort_param() {
-        let mut provider = create_provider(json!({
-            "config": r#"
-model_provider = "copilot"
-model = "claude-opus-5.5"
-
-[model_providers.copilot]
-name = "GitHub Copilot"
-base_url = "https://api.githubcopilot.com"
-wire_api = "chat"
-"#
-        }));
-        provider.meta = Some(crate::provider::ProviderMeta {
-            codex_chat_reasoning: Some(CodexChatReasoningConfig {
-                supports_thinking: Some(true),
-                supports_effort: Some(true),
-                thinking_param: Some("none".to_string()),
-                effort_param: Some("none".to_string()),
-                effort_value_mode: Some("passthrough".to_string()),
-                output_format: Some("auto".to_string()),
-                effort_levels: None,
-            }),
-            ..Default::default()
-        });
-        let request = json!({
-            "model": "claude-opus-5.5",
-            "input": "hello",
-            "reasoning": { "effort": "max" }
-        });
-
-        let config = resolve_codex_chat_reasoning_config(&provider, &request).unwrap();
-        assert_eq!(config.effort_param.as_deref(), Some("reasoning_effort"));
-
-        let transformed = crate::proxy::providers::transform_codex_chat::responses_to_chat_completions_with_reasoning(
-            request,
-            Some(&config),
-        )
-        .unwrap();
-        assert_eq!(transformed["reasoning_effort"], "max");
-    }
-
-    #[test]
-    fn test_resolve_codex_chat_reasoning_openrouter_platform_overrides_model() {
-        let provider = create_provider(json!({
-            "config": r#"
-model_provider = "openrouter"
-model = "deepseek/deepseek-chat-v3.1"
-
-[model_providers.openrouter]
-name = "OpenRouter"
-base_url = "https://openrouter.ai/api/v1"
-wire_api = "chat"
-"#
-        }));
-
-        // 模型名含 "deepseek"，但平台是 OpenRouter —— 平台规则必须覆盖模型规则。
-        let config = resolve_codex_chat_reasoning_config(
-            &provider,
-            &json!({ "model": "deepseek/deepseek-chat-v3.1" }),
-        )
-        .unwrap();
-
-        assert_eq!(config.thinking_param.as_deref(), Some("none"));
-        assert_eq!(config.effort_param.as_deref(), Some("reasoning.effort"));
-        assert_eq!(config.effort_value_mode.as_deref(), Some("openrouter"));
-        assert_eq!(config.supports_effort, Some(true));
-    }
-
-    #[test]
-    fn test_resolve_codex_chat_reasoning_siliconflow_platform_overrides_minimax() {
-        let provider = create_provider(json!({
-            "config": r#"
-model_provider = "siliconflow"
-model = "MiniMaxAI/MiniMax-M2.5"
-
-[model_providers.siliconflow]
-name = "SiliconFlow"
-base_url = "https://api.siliconflow.cn/v1"
-wire_api = "chat"
-"#
-        }));
-
-        // 模型是 MiniMax（官方用 reasoning_split），但平台是 SiliconFlow —— 应走平台的 enable_thinking。
-        let config = resolve_codex_chat_reasoning_config(
-            &provider,
-            &json!({ "model": "MiniMaxAI/MiniMax-M2.5" }),
-        )
-        .unwrap();
-
-        assert_eq!(config.thinking_param.as_deref(), Some("enable_thinking"));
-        assert_eq!(config.supports_effort, Some(false));
-        assert_eq!(config.output_format.as_deref(), Some("reasoning_content"));
-    }
-
-    #[test]
-    fn test_resolve_codex_chat_reasoning_modelscope_platform_overrides_glm() {
-        let provider = create_provider(json!({
-            "config": r#"
-model_provider = "modelscope"
-model = "ZhipuAI/GLM-5.2"
-
-[model_providers.modelscope]
-name = "ModelScope"
-base_url = "https://api-inference.modelscope.cn/v1"
-wire_api = "chat"
-"#
-        }));
-
-        // 模型是 GLM（智谱自家用 thinking:{type}），但平台是 ModelScope ——
-        // 应走平台级 enable_thinking，而不是被 glm 模型规则注入智谱方言。
-        let config =
-            resolve_codex_chat_reasoning_config(&provider, &json!({ "model": "ZhipuAI/GLM-5.2" }))
-                .unwrap();
-
-        assert_eq!(config.thinking_param.as_deref(), Some("enable_thinking"));
-        assert_eq!(config.supports_effort, Some(false));
-        assert_eq!(config.output_format.as_deref(), Some("reasoning_content"));
-    }
-
-    #[test]
-    fn test_resolve_codex_chat_reasoning_opencode_zen_platform_overrides_model_vendor() {
-        let provider = create_provider(json!({
-            "config": r#"
-model_provider = "opencode"
-model = "glm-5.2"
-
-[model_providers.opencode]
-name = "OpenCode Go"
-base_url = "https://opencode.ai/zen/go/v1"
-wire_api = "chat"
-"#
-        }));
-
-        // 模型是 GLM（智谱自家用 thinking:{type} 方言），但平台是 OpenCode Zen ——
-        // 必须走平台配置：顶层 reasoning_effort + reasoning_content，
-        // 不得注入智谱 thinking 形状。
-        let config =
-            resolve_codex_chat_reasoning_config(&provider, &json!({ "model": "glm-5.2" })).unwrap();
-
-        assert_eq!(config.supports_thinking, Some(true));
-        assert_eq!(config.supports_effort, Some(true));
-        assert_eq!(config.thinking_param.as_deref(), Some("none"));
-        assert_eq!(config.effort_param.as_deref(), Some("reasoning_effort"));
-        assert_eq!(config.effort_value_mode.as_deref(), Some("zen"));
-        assert_eq!(config.output_format.as_deref(), Some("reasoning_content"));
-    }
-
-    #[test]
-    fn test_resolve_codex_chat_reasoning_zen_attaches_per_model_effort_levels() {
-        let provider = create_provider(json!({
-            "config": r#"
-model_provider = "opencode"
-model = "glm-5.2"
-
-[model_providers.opencode]
-name = "OpenCode Go"
-base_url = "https://opencode.ai/zen/go/v1"
-wire_api = "chat"
-"#,
-            "modelCatalog": {
-                "models": [
-                    { "model": "glm-5.2", "reasoningLevels": ["high", "max"] },
-                    { "model": "deepseek-v4-flash", "reasoningLevels": ["low", "high", "max"] },
-                    { "model": "glm-5.1" }
-                ]
-            }
-        }));
-
-        // 逐模型查表：声明了 reasoningLevels 的模型附上各自档位（模型名大小写不敏感）。
-        let config =
-            resolve_codex_chat_reasoning_config(&provider, &json!({ "model": "GLM-5.2" })).unwrap();
-        assert_eq!(
-            config.effort_levels,
-            Some(vec!["high".to_string(), "max".to_string()])
-        );
-
-        let config = resolve_codex_chat_reasoning_config(
-            &provider,
-            &json!({ "model": "deepseek-v4-flash" }),
-        )
-        .unwrap();
-        assert_eq!(
-            config.effort_levels,
-            Some(vec![
-                "low".to_string(),
-                "high".to_string(),
-                "max".to_string()
-            ])
-        );
-
-        // toggle 型模型（目录条目未声明 reasoningLevels）→ None：转换层不发 effort 字段。
-        let config =
-            resolve_codex_chat_reasoning_config(&provider, &json!({ "model": "glm-5.1" })).unwrap();
-        assert_eq!(config.effort_value_mode.as_deref(), Some("zen"));
-        assert!(config.effort_levels.is_none());
-
-        // 目录未收录的模型 → 同样 None。
-        let config =
-            resolve_codex_chat_reasoning_config(&provider, &json!({ "model": "kimi-k3" })).unwrap();
-        assert!(config.effort_levels.is_none());
-    }
-
-    #[test]
-    fn test_resolve_codex_chat_reasoning_zen_levels_attach_on_explicit_meta_too() {
-        let mut provider = create_provider(json!({
-            "config": r#"
-model_provider = "opencode"
-model = "deepseek-v4-flash"
-
-[model_providers.opencode]
-name = "OpenCode Go"
-base_url = "https://opencode.ai/zen/go/v1"
-wire_api = "chat"
-"#,
-            "modelCatalog": {
-                "models": [
-                    { "model": "deepseek-v4-flash", "reasoning_levels": ["low", "high", "max"] }
-                ]
-            }
-        }));
-        // 显式 meta（表单手选 zen 模式）同样要在 resolve 末端按请求模型附表；
-        // 且手写/旧数据可能是 snake_case 的 reasoning_levels（加载侧双格式兼容）。
-        provider.meta = Some(crate::provider::ProviderMeta {
-            codex_chat_reasoning: Some(CodexChatReasoningConfig {
-                supports_thinking: Some(true),
-                supports_effort: Some(true),
-                thinking_param: Some("none".to_string()),
-                effort_param: Some("reasoning_effort".to_string()),
-                effort_value_mode: Some("zen".to_string()),
-                output_format: Some("reasoning_content".to_string()),
-                effort_levels: None,
-            }),
-            ..Default::default()
-        });
-
-        let config = resolve_codex_chat_reasoning_config(
-            &provider,
-            &json!({ "model": "deepseek-v4-flash" }),
-        )
-        .unwrap();
-
-        assert_eq!(config.effort_value_mode.as_deref(), Some("zen"));
-        assert_eq!(
-            config.effort_levels,
-            Some(vec![
-                "low".to_string(),
-                "high".to_string(),
-                "max".to_string()
-            ])
-        );
-    }
-
-    #[test]
-    fn test_infer_codex_chat_reasoning_stepfun_per_model_effort() {
-        let provider = create_provider(json!({
-            "config": r#"
-model_provider = "stepfun"
-model = "step-3.7-flash"
-
-[model_providers.stepfun]
-name = "StepFun"
-base_url = "https://api.stepfun.com/step_plan/v1"
-wire_api = "chat"
-"#
-        }));
-
-        // step-3.7-flash：官方三档 low/medium/high —— 必须 passthrough，
-        // 套 low_high 会把 medium 塌成 high（假差异档）
-        let config =
-            resolve_codex_chat_reasoning_config(&provider, &json!({ "model": "step-3.7-flash" }))
-                .unwrap();
-        assert_eq!(config.supports_effort, Some(true));
-        assert_eq!(config.effort_value_mode.as_deref(), Some("passthrough"));
-
-        // step-3.5-flash-2603：官方两档 low/high，沿用收敛映射
-        let config = resolve_codex_chat_reasoning_config(
-            &provider,
-            &json!({ "model": "step-3.5-flash-2603" }),
-        )
-        .unwrap();
-        assert_eq!(config.supports_effort, Some(true));
-        assert_eq!(config.effort_value_mode.as_deref(), Some("low_high"));
-
-        // 无后缀 step-3.5-flash：官方未暴露 effort，不下发
-        let config =
-            resolve_codex_chat_reasoning_config(&provider, &json!({ "model": "step-3.5-flash" }))
-                .unwrap();
-        assert_eq!(config.supports_effort, Some(false));
-        assert_eq!(config.thinking_param.as_deref(), Some("none"));
-    }
-
-    #[test]
-    fn xai_oauth_invariants_ignore_editable_base_url_and_auth() {
-        let adapter = CodexAdapter::new();
-        let mut provider = create_provider(json!({
-            "auth": { "OPENAI_API_KEY": "user-edited" },
-            "config": r#"
-model = "grok-4.5"
-
-[model_providers.custom]
-name = "xai"
-base_url = "https://attacker.example/v1"
-wire_api = "responses"
-"#
-        }));
-        provider.meta = Some(crate::provider::ProviderMeta {
-            provider_type: Some("xai_oauth".to_string()),
-            ..Default::default()
-        });
-
-        // 可编辑字段（base_url / auth key）不得影响托管路由：
-        // 端点硬定向 api.x.ai，凭据是占位符（真 token 由 forwarder 注入）。
-        assert_eq!(
-            adapter.extract_base_url(&provider).unwrap(),
-            super::super::XAI_API_BASE_URL
-        );
-        let auth = adapter
-            .extract_auth(&provider)
-            .expect("managed auth placeholder");
-        assert_eq!(auth.api_key, "xai_oauth_placeholder");
-        assert_eq!(auth.strategy, AuthStrategy::XaiOAuth);
-    }
-
-
-    #[test]
-    fn namespace_flatten_gate_fires_for_xai_oauth_and_api_xai_responses() {
-        let mut xai = create_provider(json!({ "auth": {}, "config": "" }));
-        xai.meta = Some(crate::provider::ProviderMeta {
-            provider_type: Some("xai_oauth".to_string()),
-            ..Default::default()
-        });
-        assert!(provider_needs_responses_namespace_flatten(&xai));
-
-        // API-key Grok cards (no xai_oauth meta) still talk to api.x.ai Responses.
-        let grok_key = create_provider(json!({
-            "auth": { "OPENAI_API_KEY": "sk-x" },
-            "config": r#"
-model_provider = "custom"
-model = "grok-4.6"
-
-[model_providers.custom]
-name = "xai"
-base_url = "https://api.x.ai/v1"
-wire_api = "responses"
-"#
-        }));
-        assert!(provider_needs_responses_namespace_flatten(&grok_key));
-
-        // A non-xAI Responses provider must not be flattened.
-        let other = create_provider(json!({
-            "auth": { "OPENAI_API_KEY": "sk-x" },
-            "config": r#"
-[model_providers.custom]
-base_url = "https://api.deepseek.com"
-wire_api = "responses"
-"#
-        }));
-        assert!(!provider_needs_responses_namespace_flatten(&other));
     }
 }

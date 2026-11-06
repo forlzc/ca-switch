@@ -1,11 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type {
-  Settings,
-  WebDavSyncSettings,
-  S3SyncSettings,
-  RemoteSnapshotInfo,
-} from "@/types";
-import type { AppId } from "./types";
+import type { Settings, WebDavSyncSettings, S3SyncSettings, RemoteSnapshotInfo } from "@/types";
 
 export interface ConfigTransferResult {
   success: boolean;
@@ -39,36 +33,6 @@ export const settingsApi = {
     return await invoke("save_settings", { settings });
   },
 
-  /** 是否存在统一 Codex 会话历史的迁移备份（关闭弹窗据此显示"恢复备份"勾选） */
-  async hasCodexUnifyHistoryBackup(): Promise<boolean> {
-    return await invoke("has_codex_unify_history_backup");
-  },
-
-  /** Codex 的 config.toml 是否用 [features] multi_agent_v2 强制了新版子 agent 工具 */
-  async codexForcesMultiAgentV2(): Promise<boolean> {
-    return await invoke("codex_forces_multi_agent_v2");
-  },
-
-  /** Codex 会话压缩开关（config.toml 的 [features] local_thread_store_compression） */
-  async getCodexSessionCompression(): Promise<boolean> {
-    return await invoke("get_codex_session_compression");
-  },
-
-  /** 开关 Codex 会话压缩，返回写入后的状态 */
-  async setCodexSessionCompression(enabled: boolean): Promise<boolean> {
-    return await invoke("set_codex_session_compression", { enabled });
-  },
-
-  /** Codex 会话目录当前占用的字节数 */
-  async getCodexSessionsDiskUsage(): Promise<number> {
-    return await invoke("get_codex_sessions_disk_usage");
-  },
-
-  /** 按迁移备份账本把当时迁入共享桶的官方会话还原回 openai 桶（幂等） */
-  async restoreCodexUnifiedHistory(): Promise<CodexUnifyHistoryRestoreResult> {
-    return await invoke("restore_codex_unified_history");
-  },
-
   async restart(): Promise<boolean> {
     return await invoke("restart_app");
   },
@@ -89,12 +53,8 @@ export const settingsApi = {
     return await invoke("is_portable_mode");
   },
 
-  async getConfigDir(appId: AppId): Promise<string> {
-    return await invoke("get_config_dir", { app: appId });
-  },
-
-  async openConfigFolder(appId: AppId): Promise<void> {
-    await invoke("open_config_folder", { app: appId });
+  async getClaudeCodeConfigPath(): Promise<string> {
+    return await invoke("get_claude_code_config_path");
   },
 
   async pickDirectory(defaultPath?: string): Promise<string | null> {
@@ -103,10 +63,6 @@ export const settingsApi = {
 
   async selectConfigDirectory(defaultPath?: string): Promise<string | null> {
     return await invoke("pick_directory", { defaultPath });
-  },
-
-  async getClaudeCodeConfigPath(): Promise<string> {
-    return await invoke("get_claude_code_config_path");
   },
 
   async getAppConfigPath(): Promise<string> {
@@ -127,21 +83,6 @@ export const settingsApi = {
 
   async setAppConfigDirOverride(path: string | null): Promise<boolean> {
     return await invoke("set_app_config_dir_override", { path });
-  },
-
-  async applyClaudePluginConfig(options: {
-    official: boolean;
-  }): Promise<boolean> {
-    const { official } = options;
-    return await invoke("apply_claude_plugin_config", { official });
-  },
-
-  async applyClaudeOnboardingSkip(): Promise<boolean> {
-    return await invoke("apply_claude_onboarding_skip");
-  },
-
-  async clearClaudeOnboardingSkip(): Promise<boolean> {
-    return await invoke("clear_claude_onboarding_skip");
   },
 
   async saveFileDialog(defaultName: string): Promise<string | null> {
@@ -232,16 +173,6 @@ export const settingsApi = {
 
   async s3SyncFetchRemoteInfo(): Promise<RemoteSnapshotInfo | { empty: true }> {
     return await invoke("s3_sync_fetch_remote_info");
-  },
-
-  async syncCurrentProvidersLive(): Promise<void> {
-    const result = (await invoke("sync_current_providers_live")) as {
-      success?: boolean;
-      message?: string;
-    };
-    if (!result?.success) {
-      throw new Error(result?.message || "Sync current providers failed");
-    }
   },
 
   async openExternal(url: string): Promise<void> {

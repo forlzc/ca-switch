@@ -9,23 +9,12 @@ import { proxyKeys } from "@/lib/query/proxy";
 import type { AppMode } from "@/types/proxy";
 import { APP_DISPLAY_NAME } from "@/components/shell/AppGlyph";
 
-/** 这几个客户端只在启动时读配置：改写了客户端文件要提示重启（Claude Code 会自己重读）。 */
-const RESTART_TO_APPLY = new Set<AppId>([
-  "codex",
-  "gemini",
-  "grokbuild",
-  "claude-desktop",
-]);
-
 /** 进入 / 离开路由和聚合模式。两个方向都先在确认框里确认，出错由确认框就地显示。 */
 export function useModeActions(app: AppId) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [pending, setPending] = useState(false);
   const appName = APP_DISPLAY_NAME[app];
-  const restartHint = RESTART_TO_APPLY.has(app)
-    ? t("mode.toast.restartHint", { app: appName })
-    : "";
 
   const refresh = useCallback(async () => {
     await Promise.all([
@@ -54,26 +43,18 @@ export function useModeActions(app: AppId) {
         await refresh();
         toast.success(
           mode === "route"
-            ? // Desktop 的模型列表也换成了路由那家的，要重启才看得到
-              t("mode.toast.enteredRoute", {
+            ? t("mode.toast.enteredRoute", {
                 app: appName,
                 provider: routeName ?? "",
-              }) + (app === "claude-desktop" ? restartHint : "")
-            : t(
-                app === "codex"
-                  ? "mode.toast.enteredStack"
-                  : app === "claude-desktop"
-                    ? "mode.toast.enteredStackDesktop"
-                    : "mode.toast.enteredStackLive",
-                { app: appName },
-              ),
+              })
+            : t("mode.toast.enteredStackLive", { app: appName }),
           { closeButton: true },
         );
       } finally {
         setPending(false);
       }
     },
-    [app, appName, refresh, restartHint, t],
+    [app, appName, refresh, t],
   );
 
   /**
@@ -98,12 +79,7 @@ export function useModeActions(app: AppId) {
         }
         await refresh();
         toast.success(
-          [
-            t("mode.toast.exited", { app: appName, provider: providerName }),
-            restartHint,
-          ]
-            .filter(Boolean)
-            .join(""),
+          t("mode.toast.exited", { app: appName, provider: providerName }),
           { closeButton: true },
         );
       } catch (error) {
@@ -113,8 +89,8 @@ export function useModeActions(app: AppId) {
         setPending(false);
       }
     },
-    [app, appName, refresh, restartHint, t],
+    [app, appName, refresh, t],
   );
 
-  return { enter, exitToDirect, pending, restartHint };
+  return { enter, exitToDirect, pending, restartHint: "" };
 }

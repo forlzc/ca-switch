@@ -21,9 +21,7 @@ const POINT_RELEASE_CLIENT_IDS: &[(&str, &str, &str)] = &[
 
 /// 上游是比代际别名更新的小版本时，客户端目录里对应的 id。
 pub fn point_release_client_id(family_alias: &str, upstream: &str) -> Option<&'static str> {
-    let id = crate::proxy::model_mapper::strip_one_m_suffix_for_upstream(upstream)
-        .trim()
-        .to_ascii_lowercase();
+    let id = upstream.trim().to_ascii_lowercase();
     POINT_RELEASE_CLIENT_IDS
         .iter()
         .filter(|(alias, _, _)| *alias == family_alias)

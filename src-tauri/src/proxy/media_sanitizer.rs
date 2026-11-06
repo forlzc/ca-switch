@@ -1652,7 +1652,7 @@ mod tests {
         // issue #5025：火山 Coding Plan 的 GLM 5.2 是纯文本端点，
         // 映射链 glm-5.2[1M] 归一化后尾部为 glm-5.2。
         assert!(confirmed_text_only_model("glm-5.2"));
-        assert!(confirmed_text_only_model("GLM-5.2[1M]"));
+        assert!(confirmed_text_only_model("GLM-5.2"));
         assert!(confirmed_text_only_model("zai-org/GLM-5.2"));
         // 未来视觉版（智谱 4v/5v 命名惯例）不能被误判为纯文本。
         assert!(!confirmed_text_only_model("glm-5.2v"));

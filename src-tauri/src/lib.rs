@@ -1,47 +1,26 @@
-mod agy_config;
 mod app_config;
 mod app_store;
 mod auto_launch;
-mod claude_desktop_config;
-mod claude_onboarding;
-mod claude_plugin;
-mod codex_config;
-mod codex_history_migration;
-mod codex_rollout_file;
-mod codex_state_db;
 mod commands;
 mod config;
 mod database;
 mod deeplink;
-mod dsh_config;
 mod error;
-mod gemini_config;
-mod grok_config;
-pub mod hermes_config;
 mod init_status;
-mod jsonc_document;
-mod kimi_config;
-mod kimi_session;
+ 
 mod lightweight;
 #[cfg(target_os = "linux")]
 mod linux_fix;
-mod mcode_config;
 mod model_capabilities;
-mod omp_config;
-mod openclaw_config;
-mod opencode_config;
 mod panic_hook;
-mod pi_config;
 mod prompt;
 mod prompt_files;
 pub mod floor;
 pub mod model_label;
-pub mod patch;
 pub mod protocol;
 mod provider;
 mod proxy;
 mod services;
-mod session_manager;
 mod settings;
 mod store;
 
@@ -53,17 +32,12 @@ mod usage_events;
 mod usage_script;
 
 pub use app_config::{AppType, MultiAppConfig};
-pub use codex_config::{
-    extract_codex_experimental_bearer_token, get_codex_auth_path, get_codex_config_path,
-    read_codex_live_settings, write_codex_live_atomic,
-};
 pub use commands::open_provider_terminal;
 pub use commands::*;
 pub use config::{get_claude_settings_path, read_json_file};
 pub use database::{Database, Profile};
 pub use deeplink::{import_provider_from_deeplink, parse_deeplink_url, DeepLinkImportRequest};
 pub use error::AppError;
-pub use grok_config::get_grok_config_path;
 pub use prompt::Prompt;
 pub use protocol::{AuthStyle, Conversion, Matrix, Protocol, ProtocolSource, Transform};
 pub use provider::{Provider, ProviderMeta};
@@ -795,142 +769,10 @@ pub fn run() {
             let fresh_install_at_startup =
                 app_state.db.is_providers_empty().unwrap_or(false);
 
-            {
-                let db_for_codex_history_migration = app_state.db.clone();
-                tauri::async_runtime::spawn_blocking(move || {
-                    match crate::codex_history_migration::maybe_migrate_codex_third_party_history_provider_bucket(
-                        &db_for_codex_history_migration,
-                    ) {
-                        Ok(outcome) => {
-                            if let Some(reason) = outcome.skipped_reason {
-                                log::debug!("○ Codex history provider bucket migration skipped: {reason}");
-                            } else {
-                                log::info!(
-                                    "✓ Codex history provider bucket migration completed: sources={}, jsonl_files={}, state_rows={}",
-                                    outcome.source_provider_ids.len(),
-                                    outcome.migrated_jsonl_files,
-                                    outcome.migrated_state_rows
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("✗ Codex history provider bucket migration failed: {e}");
-                        }
-                    }
-
-                    match crate::codex_history_migration::maybe_migrate_codex_provider_template_bucket(
-                        &db_for_codex_history_migration,
-                    ) {
-                        Ok(outcome) => {
-                            if let Some(reason) = outcome.skipped_reason {
-                                log::debug!("○ Codex provider template bucket migration skipped: {reason}");
-                            } else if !outcome.migrated_provider_ids.is_empty() {
-                                log::info!(
-                                    "✓ Codex provider template bucket migration completed: providers={}",
-                                    outcome.migrated_provider_ids.len()
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("✗ Codex provider template bucket migration failed: {e}");
-                        }
-                    }
-
-                    // 旧版官方路由桶（cc-switch-official）迁回 openai，须在统一迁移之前：
-                    // 开关开着时，紧接着的统一迁移会把它们按正常流程带进 custom。
-                    match crate::codex_history_migration::maybe_migrate_codex_legacy_official_history_to_openai_bucket() {
-                        Ok(outcome) => {
-                            if let Some(reason) = outcome.skipped_reason {
-                                log::debug!("○ Codex legacy official history bucket migration skipped: {reason}");
-                            } else {
-                                log::info!(
-                                    "✓ Codex legacy official history bucket migration completed: jsonl_files={}, state_rows={}",
-                                    outcome.migrated_jsonl_files,
-                                    outcome.migrated_state_rows
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("✗ Codex legacy official history bucket migration failed: {e}");
-                        }
-                    }
-
-                    // 统一会话开关的官方历史迁移：开关开启但上次未完成（如文件被占用
-                    // 中途失败）时在启动期重试；函数内部自门控，开关关闭时直接跳过。
-                    match crate::codex_history_migration::maybe_migrate_codex_official_history_to_unified_bucket() {
-                        Ok(outcome) => {
-                            if let Some(reason) = outcome.skipped_reason {
-                                log::debug!("○ Codex official history unify migration skipped: {reason}");
-                            } else {
-                                log::info!(
-                                    "✓ Codex official history unify migration completed: jsonl_files={}, state_rows={}",
-                                    outcome.migrated_jsonl_files,
-                                    outcome.migrated_state_rows
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("✗ Codex official history unify migration failed: {e}");
-                        }
-                    }
-                });
-            }
-
             // 老用户 / 已确认的路径由 `fresh_install_at_startup` 自行拦截，这里不做写入。
             // 字段只由前端在用户点击"我知道了"时 save_settings 回写，语义是"用户显式确认过"。
             if !first_run_already_confirmed && fresh_install_at_startup {
                 log::info!("✓ First-run welcome notice pending");
-            }
-
-            // 2. OMO 配置导入（当数据库中无 OMO provider 时，从本地文件导入）
-            {
-                let has_omo = app_state
-                    .db
-                    .get_all_providers("opencode")
-                    .map(|providers| providers.values().any(|p| p.category.as_deref() == Some("omo")))
-                    .unwrap_or(false);
-                if !has_omo {
-                    match crate::services::OmoService::import_from_local(&app_state, &crate::services::omo::STANDARD) {
-                        Ok(provider) => {
-                            log::info!("✓ Imported OMO config from local as provider '{}'", provider.name);
-                        }
-                        Err(AppError::OmoConfigNotFound) => {
-                            log::debug!("○ No OMO config to import");
-                        }
-                        Err(e) => {
-                            log::warn!("✗ Failed to import OMO config from local: {e}");
-                        }
-                    }
-                }
-            }
-
-            // 2.3 OMO Slim config import (when no omo-slim provider in DB, import from local)
-            {
-                let has_omo_slim = app_state
-                    .db
-                    .get_all_providers("opencode")
-                    .map(|providers| {
-                        providers
-                            .values()
-                            .any(|p| p.category.as_deref() == Some("omo-slim"))
-                    })
-                    .unwrap_or(false);
-                if !has_omo_slim {
-                    match crate::services::OmoService::import_from_local(&app_state, &crate::services::omo::SLIM) {
-                        Ok(provider) => {
-                            log::info!(
-                                "✓ Imported OMO Slim config from local as provider '{}'",
-                                provider.name
-                            );
-                        }
-                        Err(AppError::OmoConfigNotFound) => {
-                            log::debug!("○ No OMO Slim config to import");
-                        }
-                        Err(e) => {
-                            log::warn!("✗ Failed to import OMO Slim config from local: {e}");
-                        }
-                    }
-                }
             }
 
             // 精简版升级：一次性清空历史供应商数据，之后只允许新建自定义供应商。
@@ -1082,62 +924,6 @@ pub fn run() {
             );
             // 将同一个实例注入到全局状态，避免重复创建导致的不一致
             app.manage(app_state);
-            app.manage(services::kimi_oauth::KimiOAuthManager::default());
-
-            // 初始化 SkillService
-
-            // 初始化 CopilotAuthManager
-            {
-                use crate::proxy::providers::copilot_auth::CopilotAuthManager;
-                use commands::CopilotAuthState;
-                use tokio::sync::RwLock;
-
-                let app_config_dir = crate::config::get_app_config_dir();
-                let copilot_auth_manager = CopilotAuthManager::new(app_config_dir);
-                app.manage(CopilotAuthState(Arc::new(RwLock::new(copilot_auth_manager))));
-                log::info!("✓ CopilotAuthManager initialized");
-            }
-
-            // 初始化 CodexOAuthManager (ChatGPT Plus/Pro 反代)
-            {
-                use commands::CodexOAuthState;
-
-                let codex_oauth_manager =
-                    app.state::<AppState>().codex_oauth_manager.clone();
-                app.manage(CodexOAuthState(codex_oauth_manager));
-                log::info!("✓ CodexOAuthManager initialized");
-            }
-
-            // 初始化 xAI OAuthManager (Grok API 反代)
-            {
-                use crate::proxy::providers::xai_oauth_auth::XaiOAuthManager;
-                use commands::XaiOAuthState;
-                use tokio::sync::RwLock;
-
-                let app_config_dir = crate::config::get_app_config_dir();
-                let xai_oauth_manager = XaiOAuthManager::new(app_config_dir);
-                app.manage(XaiOAuthState(Arc::new(RwLock::new(xai_oauth_manager))));
-                log::info!("✓ XaiOAuthManager initialized");
-            }
-
-            // Antigravity 官方账号（授权中心加号、切 agy 的全局登录）
-            {
-                use crate::services::agy_account::AgyAccountManager;
-                let manager = AgyAccountManager::new(crate::config::get_app_config_dir());
-                app.manage(commands::AgyAccountState(Arc::new(manager)));
-            }
-
-            // Claude Code 官方订阅账号（授权中心加号；每个账号一个 CLAUDE_CONFIG_DIR）
-            {
-                use crate::services::claude_account::ClaudeAccountManager;
-                let data_dir = crate::config::get_app_config_dir();
-                let manager = ClaudeAccountManager::new(data_dir.clone());
-                app.manage(commands::ClaudeAccountState(Arc::new(manager)));
-                std::thread::spawn(move || {
-                    // 默认目录的设置可能在应用没运行时改过
-                    crate::services::claude_account::sync_all_shared(&data_dir)
-                });
-            }
 
             // 初始化全局出站代理 HTTP 客户端
             {
@@ -1202,56 +988,16 @@ pub fn run() {
                     }
                 });
 
-                // Session log usage sync: 启动时同步一次，之后每 10 分钟兜底一次（防 CLI 清理旧会话
-                // 文件前漏导入）；用量页打开时由前端按所选间隔加扫
-                let db_for_session_sync = state.db.clone();
+                // 启动时补齐既有请求记录的费用（只写数据库，不读任何客户端会话文件）
+                let db_for_cost_backfill = state.db.clone();
                 tauri::async_runtime::spawn(async move {
-                    const SESSION_SYNC_INTERVAL_SECS: u64 = 10 * 60;
-
-                    async fn run_session_sync(db: std::sync::Arc<crate::database::Database>, backfill: bool) {
-                        // 手动扫描模式下跳过定时扫描；backfill 轮（启动首轮）仍进入，
-                        // 费用回填只修补数据库既有行（含代理记账行），不读会话文件
-                        if !backfill && !crate::settings::get_settings().session_auto_sync_enabled {
-                            return;
+                    let task = tauri::async_runtime::spawn_blocking(move || {
+                        if let Err(error) = db_for_cost_backfill.backfill_missing_usage_costs() {
+                            log::warn!("Usage cost startup backfill failed: {error}");
                         }
-                        let _guard = crate::services::session_usage::session_sync_mutex()
-                            .lock()
-                            .await;
-                        let task = tauri::async_runtime::spawn_blocking(move || {
-                            if backfill {
-                                if let Err(error) = db.backfill_missing_usage_costs() {
-                                    log::warn!("Usage cost startup backfill failed: {error}");
-                                }
-                            }
-                            if !crate::settings::get_settings().session_auto_sync_enabled {
-                                return crate::services::session_usage::SessionSyncResult::default();
-                            }
-                            crate::services::session_usage::sync_all_unlocked(&db)
-                        });
-                        match task.await {
-                            Ok(result) if !result.errors.is_empty() => {
-                                log::warn!(
-                                    "Session usage sync completed with {} error(s)",
-                                    result.errors.len()
-                                );
-                            }
-                            Ok(_) => {}
-                            Err(error) => log::warn!("Session usage blocking task failed: {error}"),
-                        }
-                    }
-
-                    // 首次同步（含费用回填）
-                    run_session_sync(db_for_session_sync.clone(), true).await;
-
-                    // 定期同步
-                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(
-                        SESSION_SYNC_INTERVAL_SECS,
-                    ));
-                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                    interval.tick().await; // skip immediate first tick
-                    loop {
-                        interval.tick().await;
-                        run_session_sync(db_for_session_sync.clone(), false).await;
+                    });
+                    if let Err(error) = task.await {
+                        log::warn!("Usage cost backfill task failed: {error}");
                     }
                 });
             });
@@ -1329,12 +1075,6 @@ pub fn run() {
             commands::get_provider_editor_view,
             commands::delete_provider,
             commands::switch_provider,
-            commands::get_claude_desktop_status,
-            commands::get_claude_desktop_default_routes,
-            commands::import_claude_desktop_providers_from_claude,
-            commands::ensure_claude_desktop_official_provider,
-            commands::ensure_codex_official_provider,
-            commands::ensure_grokbuild_official_provider,
             commands::get_claude_config_status,
             commands::get_config_status,
             commands::get_claude_code_config_path,
@@ -1353,17 +1093,10 @@ pub fn run() {
             commands::set_common_config_snippet,
             commands::get_settings,
             commands::save_settings,
-            commands::has_codex_unify_history_backup,
-            commands::codex_forces_multi_agent_v2,
-            commands::get_codex_session_compression,
-            commands::get_codex_sessions_disk_usage,
-            commands::restore_codex_unified_history,
             commands::get_rectifier_config,
             commands::set_rectifier_config,
             commands::get_optimizer_config,
             commands::set_optimizer_config,
-            commands::get_copilot_optimizer_config,
-            commands::set_copilot_optimizer_config,
             commands::get_log_config,
             commands::set_log_config,
             commands::restart_app,
@@ -1373,33 +1106,16 @@ pub fn run() {
             commands::open_portable_update_download,
             commands::is_portable_mode,
             commands::copy_text_to_clipboard,
-            commands::get_claude_plugin_status,
-            commands::read_claude_plugin_config,
-            commands::apply_claude_plugin_config,
-            commands::is_claude_plugin_applied,
-            commands::apply_claude_onboarding_skip,
-            commands::clear_claude_onboarding_skip,
-            // Claude MCP management
             // usage query
             commands::queryProviderUsage,
             commands::testUsageScript,
             // subscription quota
             commands::get_subscription_quota,
-            commands::get_codex_oauth_quota,
-            commands::get_codex_oauth_models,
-            commands::get_xai_oauth_models,
-            commands::get_xai_oauth_quota,
             commands::get_coding_plan_quota,
             commands::get_balance,
             // New MCP via config.json (SSOT)
             // Unified MCP management
             // Prompt management removed
-            // Pi native provider and session views
-            commands::get_pi_current_state,
-            commands::update_pi_provider_usage_script,
-            commands::get_pi_session_discovery,
-            // Oh My Pi native provider and session views
-            commands::get_omp_current_state,
             // Profile management (项目配置方案)
             commands::list_profiles,
             commands::create_profile,
@@ -1410,8 +1126,6 @@ pub fn run() {
             // Fetch OpenAI-compatible and Anthropic model lists. Response data structure:
             // data[].id, data[]?.owned_by. Special: supports Zhipu OpenAI Responses models[].slug.
             commands::fetch_models_for_config,
-            commands::get_agy_models,
-            commands::get_opencode_models,
             // ours: endpoint speed test + custom endpoint management
             commands::test_api_endpoints,
             commands::get_custom_endpoints,
@@ -1504,7 +1218,6 @@ pub fn run() {
             commands::set_auto_failover_enabled,
             // Usage statistics
             commands::get_usage_summary,
-            commands::get_session_usage_summary,
             commands::get_usage_summary_by_app,
             commands::get_usage_trends,
             commands::get_usage_first_date,
@@ -1521,11 +1234,6 @@ pub fn run() {
             commands::record_models_dev_sync_result,
             commands::fetch_models_dev,
             commands::check_provider_limits,
-            // Session usage sync
-            commands::sync_session_usage,
-            commands::rebuild_codex_usage,
-            commands::get_session_usage_last_sync,
-            commands::get_usage_data_sources,
             commands::fetch_exchange_rates,
             // Stream health check
             commands::stream_check_provider,
@@ -1543,34 +1251,6 @@ pub fn run() {
             commands::add_custom_icon,
             commands::rename_custom_icon,
             commands::delete_custom_icon,
-            // OpenCode specific
-            commands::get_opencode_live_provider_ids,
-            commands::get_opencode_default_model,
-            commands::set_opencode_default_model,
-            // OpenClaw specific
-            commands::get_openclaw_live_provider_ids,
-            commands::get_openclaw_live_provider,
-            commands::scan_openclaw_config_health,
-            commands::get_openclaw_default_model,
-            commands::set_openclaw_default_model,
-            commands::get_openclaw_model_catalog,
-            commands::set_openclaw_model_catalog,
-            commands::get_openclaw_agents_defaults,
-            commands::set_openclaw_agents_defaults,
-            commands::get_openclaw_env,
-            commands::set_openclaw_env,
-            commands::get_openclaw_tools,
-            commands::set_openclaw_tools,
-            // Hermes specific
-            commands::get_hermes_live_provider_ids,
-            commands::get_hermes_live_provider,
-            commands::get_hermes_model_config,
-            commands::open_hermes_web_ui,
-            commands::launch_hermes_dashboard,
-            commands::get_hermes_memory,
-            commands::set_hermes_memory,
-            commands::get_hermes_memory_limits,
-            commands::set_hermes_memory_enabled,
             // Global upstream proxy
             commands::get_global_proxy_url,
             commands::set_global_proxy_url,
@@ -1579,57 +1259,6 @@ pub fn run() {
             commands::scan_local_proxies,
             // Window theme control
             commands::set_window_theme,
-            // Generic managed auth commands
-            commands::auth_start_login,
-            commands::auth_poll_for_account,
-            commands::auth_cancel_login,
-            commands::auth_list_accounts,
-            commands::auth_get_status,
-            commands::auth_remove_account,
-            commands::auth_set_default_account,
-            commands::auth_logout,
-            commands::agy_account_is_running,
-            commands::agy_account_quota,
-            commands::claude_account_submit_paste,
-            commands::get_claude_account_quota,
-            commands::get_claude_default_plan,
-            commands::get_claude_login_switch,
-            commands::kimi_oauth_status,
-            commands::dsh_account_status,
-            commands::dsh_account_sign_out,
-            commands::dsh_account_login_start,
-            commands::dsh_account_login_poll,
-            commands::dsh_account_login_cancel,
-            commands::kimi_oauth_start,
-            commands::kimi_oauth_poll,
-            commands::kimi_oauth_cancel,
-            commands::kimi_oauth_remove,
-            commands::kimi_oauth_quota,
-            commands::kimi_oauth_use_account,
-            commands::kimi_oauth_models,
-            // Copilot OAuth commands (multi-account support)
-            commands::copilot_start_device_flow,
-            commands::copilot_poll_for_auth,
-            commands::copilot_poll_for_account,
-            commands::copilot_list_accounts,
-            commands::copilot_remove_account,
-            commands::copilot_set_default_account,
-            commands::copilot_get_auth_status,
-            commands::copilot_logout,
-            commands::copilot_is_authenticated,
-            commands::copilot_get_token,
-            commands::copilot_get_token_for_account,
-            commands::copilot_get_models,
-            commands::copilot_get_models_for_account,
-            commands::copilot_get_usage,
-            commands::copilot_get_usage_for_account,
-            // OMO commands
-            commands::read_omo_local_file,
-            commands::get_current_omo_provider_id,
-            commands::disable_current_omo,
-            commands::read_omo_slim_local_file,
-            commands::get_current_omo_slim_provider_id,
-            commands::disable_current_omo_slim,
             // lightweight mode (for testing or low-resource environments)
             commands::enter_lightweight_mode,
             commands::exit_lightweight_mode,

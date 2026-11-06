@@ -56,12 +56,9 @@ function Harness({ onReadConfig }: { onReadConfig: (config: string) => void }) {
   );
 
   const { handleClaudeBaseUrlChange } = useBaseUrlState({
-    appType: "claude",
     category: "custom",
     settingsConfig: form.getValues("settingsConfig"),
-    codexConfig: "",
     onSettingsConfigChange: handleSettingsConfigChange,
-    onCodexConfigChange: () => {},
     getSettingsConfig,
   });
 

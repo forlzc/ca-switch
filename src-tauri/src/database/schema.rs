@@ -338,47 +338,8 @@ impl Database {
 
         // 18. Session Log Sync 表 (会话日志同步状态)
         //
-        // last_byte_offset：Claude 路径的字节游标（seek 增量读）；NULL 表示
-        // 尚无字节游标（旧行号游标或非 Claude 路径行），此时回退全量读。
-        // last_tail_fingerprint：游标边界前尾部字节的指纹，用于识别文件被
-        // 外部重写（同尺寸/更大的替换无法靠 size 检测）；NULL 表示无指纹
-        // 可校验，按纯追加处理。
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS session_log_sync (
-                file_path TEXT PRIMARY KEY,
-                last_modified INTEGER NOT NULL,
-                last_line_offset INTEGER NOT NULL DEFAULT 0,
-                last_synced_at INTEGER NOT NULL,
-                last_byte_offset INTEGER,
-                last_tail_fingerprint INTEGER,
-                parser_state TEXT
-            )",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
-        // 修复跑过未发布开发版 v24 的库：parser_state 随 v24 定稿，不单独 bump 版本
-        Self::add_column_if_missing(conn, "session_log_sync", "parser_state", "TEXT")?;
-
-        // Session detail rows are pruned after rollup, so request IDs needed
-        // for fork/rewrite deduplication live in a compact durable ledger.
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS session_usage_dedup (
-                data_source TEXT NOT NULL,
-                request_id TEXT NOT NULL,
-                semantic_id TEXT NOT NULL,
-                has_entry_id INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (data_source, request_id)
-            )",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_session_usage_dedup_semantic
-             ON session_usage_dedup(data_source, semantic_id, has_entry_id)",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
+        // 通用代理软件不再读取客户端会话日志：会话游标/去重表不再创建，
+        // 老版本遗留的这两张表由 v27 迁移 DROP。
 
         // 19. Profiles 表（全应用共享的项目实体，payload 按 app 分槽快照
         //     供应商/MCP/Skills/Prompt；各应用分组的 current 标记在 settings 表）
@@ -688,6 +649,11 @@ impl Database {
                         Self::migrate_v25_to_v26(conn)?;
                         Self::set_user_version(conn, 26)?;
                     }
+                    26 => {
+                        log::info!("迁移数据库从 v26 到 v27（清理历史会话日志用量）");
+                        Self::migrate_v26_to_v27(conn)?;
+                        Self::set_user_version(conn, 27)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -720,6 +686,26 @@ impl Database {
     /// 每一条历史迁移测试里跑，放在这里会把刚恢复的供应商整表删掉（v3.8 备份
     /// 回归测试即因此红掉）。schema 层只保留版本推进。
     fn migrate_v25_to_v26(_conn: &Connection) -> Result<(), AppError> {
+        Ok(())
+    }
+
+    /// v26 → v27：通用代理软件只统计代理流量。清掉历史「读取客户端会话日志」
+    /// 导入的用量行及游标/去重表，避免旧数据继续出现在用量页。
+    fn migrate_v26_to_v27(conn: &Connection) -> Result<(), AppError> {
+        if Self::table_exists(conn, "proxy_request_logs")? {
+            conn.execute(
+                "DELETE FROM proxy_request_logs
+                 WHERE COALESCE(data_source, 'proxy') <> 'proxy'",
+                [],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        }
+        for table in ["session_log_sync", "session_usage_dedup"] {
+            if Self::table_exists(conn, table)? {
+                conn.execute(&format!("DROP TABLE {table}"), [])
+                    .map_err(|e| AppError::Database(e.to_string()))?;
+            }
+        }
         Ok(())
     }
 
@@ -2114,12 +2100,30 @@ impl Database {
         Ok(())
     }
 
-    /// v15 -> v16: remove Codex session rows and cursors so startup sync can
-    /// rebuild them with fork-history alignment. Must stay connection-level:
-    /// schema migration already owns the Database connection mutex.
+    /// v15 -> v16: 清除已下线的会话日志用量数据（Codex 会话明细、汇总与同步游标）。
+    /// 会话日志读取方式已移除，旧库里残留的 `*_session` 记账行一律不再保留。
+    /// 必须保持连接级实现：schema 迁移已持有 Database 连接锁。
     fn migrate_v15_to_v16(conn: &Connection) -> Result<(), AppError> {
-        let codex_dir = crate::codex_config::get_codex_config_dir();
-        crate::services::session_usage_codex::reset_codex_usage_on_conn(conn, &codex_dir)
+        if Self::table_exists(conn, "proxy_request_logs")? {
+            conn.execute(
+                "DELETE FROM proxy_request_logs WHERE data_source = 'session_log' \
+                 OR data_source LIKE '%\\_session' ESCAPE '\\'",
+                [],
+            )
+            .map_err(|error| AppError::Database(format!("清理会话用量明细失败: {error}")))?;
+        }
+        if Self::table_exists(conn, "usage_daily_rollups")? {
+            conn.execute(
+                "DELETE FROM usage_daily_rollups WHERE provider_id LIKE '%\\_session' ESCAPE '\\'",
+                [],
+            )
+            .map_err(|error| AppError::Database(format!("清理会话用量汇总失败: {error}")))?;
+        }
+        if Self::table_exists(conn, "session_log_sync")? {
+            conn.execute("DELETE FROM session_log_sync", [])
+                .map_err(|error| AppError::Database(format!("清理会话同步游标失败: {error}")))?;
+        }
+        Ok(())
     }
 
     /// v16 -> v17: preserve session request identities after detail rollup.
@@ -4402,89 +4406,6 @@ impl Database {
 mod tests {
     use super::*;
 
-    #[test]
-    fn migrate_v23_to_v24_preserves_existing_session_cursors() -> Result<(), AppError> {
-        let conn = Connection::open_in_memory()?;
-        conn.execute_batch(
-            "CREATE TABLE session_log_sync (
-                file_path TEXT PRIMARY KEY, last_modified INTEGER NOT NULL,
-                last_line_offset INTEGER NOT NULL DEFAULT 0, last_synced_at INTEGER NOT NULL,
-                last_byte_offset INTEGER, last_tail_fingerprint INTEGER
-             );
-             INSERT INTO session_log_sync VALUES ('dsh:test', 11, 123, 12, 123, NULL);",
-        )?;
-        Database::set_user_version(&conn, 23)?;
-        Database::apply_schema_migrations_on_conn(&conn)?;
-        Database::apply_schema_migrations_on_conn(&conn)?;
-        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
-        let row: (i64, i64, Option<String>) = conn.query_row(
-            "SELECT last_modified, last_byte_offset, parser_state FROM session_log_sync",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
-        assert_eq!(row, (11, 123, None));
-        Ok(())
-    }
-
-    #[test]
-    fn create_tables_patches_parser_state_into_unreleased_v24_dev_databases() -> Result<(), AppError>
-    {
-        let conn = Connection::open_in_memory()?;
-        conn.execute_batch(
-            "CREATE TABLE session_log_sync (
-                file_path TEXT PRIMARY KEY, last_modified INTEGER NOT NULL,
-                last_line_offset INTEGER NOT NULL DEFAULT 0, last_synced_at INTEGER NOT NULL,
-                last_byte_offset INTEGER, last_tail_fingerprint INTEGER
-             );",
-        )?;
-        Database::set_user_version(&conn, 24)?;
-        Database::create_tables_on_conn(&conn)?;
-        Database::apply_schema_migrations_on_conn(&conn)?;
-        assert!(Database::has_column(
-            &conn,
-            "session_log_sync",
-            "parser_state"
-        )?);
-        Ok(())
-    }
-
-    #[test]
-    fn migrate_v12_to_v13_adds_input_token_semantics_columns() -> Result<(), AppError> {
-        let conn = Connection::open_in_memory()?;
-        conn.execute(
-            "CREATE TABLE proxy_request_logs (request_id TEXT PRIMARY KEY)",
-            [],
-        )?;
-        conn.execute(
-            "CREATE TABLE usage_daily_rollups (date TEXT PRIMARY KEY)",
-            [],
-        )?;
-        Database::set_user_version(&conn, 12)?;
-
-        Database::apply_schema_migrations_on_conn(&conn)?;
-
-        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
-        assert!(Database::has_column(
-            &conn,
-            "proxy_request_logs",
-            "input_token_semantics"
-        )?);
-        assert!(Database::has_column(
-            &conn,
-            "usage_daily_rollups",
-            "input_token_semantics"
-        )?);
-        let log_default: i64 = conn.query_row(
-            "SELECT dflt_value = '0' FROM pragma_table_info('proxy_request_logs')
-             WHERE name = 'input_token_semantics'",
-            [],
-            |row| row.get(0),
-        )?;
-        assert_eq!(log_default, 1);
-
-        Ok(())
-    }
-
     /// v25 迁移实测：旧库的两个命名空间收敛成一份供应商，同 id 不同上游改名保留，
     /// 全局只留一个激活项，proxy_config 四行按 ② 打上入口协议标签。
     #[test]
@@ -4605,105 +4526,6 @@ mod tests {
         )?;
         assert_eq!(codex_values, (1, 9));
 
-        Ok(())
-    }
-
-    #[test]
-    fn migrate_v15_to_v16_resets_only_codex_session_usage() -> Result<(), AppError> {
-        let conn = Connection::open_in_memory()?;
-        Database::create_tables_on_conn(&conn)?;
-        conn.execute_batch(
-            "INSERT INTO proxy_request_logs (
-                request_id, provider_id, app_type, model, input_tokens,
-                output_tokens, cache_read_tokens, latency_ms, status_code,
-                created_at, data_source
-             ) VALUES
-                ('codex-row', '_codex_session', 'codex', 'gpt', 1, 1, 0, 0, 200, 1, 'codex_session'),
-                ('gemini-row', '_gemini_session', 'gemini', 'gemini', 1, 1, 0, 0, 200, 1, 'gemini_session');
-             INSERT INTO usage_daily_rollups (date, app_type, provider_id, model)
-             VALUES
-                ('2026-07-10', 'codex', '_codex_session', 'gpt'),
-                ('2026-07-10', 'gemini', '_gemini_session', 'gemini');
-             INSERT INTO session_log_sync
-                (file_path, last_modified, last_line_offset, last_synced_at)
-             VALUES
-                ('/old/sessions/rollout-old-00000000-0000-4000-8000-000000000001.jsonl', 1, 1, 1),
-                ('/gemini/tmp/session-123.json', 1, 1, 1);",
-        )?;
-        Database::set_user_version(&conn, 15)?;
-
-        Database::apply_schema_migrations_on_conn(&conn)?;
-
-        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
-        assert!(Database::table_exists(&conn, "session_usage_dedup")?);
-        let counts: (i64, i64, i64, i64) = conn.query_row(
-            "SELECT
-                (SELECT COUNT(*) FROM proxy_request_logs WHERE data_source = 'codex_session'),
-                (SELECT COUNT(*) FROM proxy_request_logs WHERE data_source = 'gemini_session'),
-                (SELECT COUNT(*) FROM usage_daily_rollups WHERE provider_id = '_codex_session'),
-                (SELECT COUNT(*) FROM session_log_sync)",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )?;
-        assert_eq!(counts, (0, 1, 0, 1));
-        Ok(())
-    }
-
-    #[test]
-    fn migrate_v16_to_v17_creates_session_usage_dedup_ledger() -> Result<(), AppError> {
-        let conn = Connection::open_in_memory()?;
-        Database::set_user_version(&conn, 16)?;
-
-        Database::apply_schema_migrations_on_conn(&conn)?;
-
-        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
-        assert!(Database::table_exists(&conn, "session_usage_dedup")?);
-        conn.execute(
-            "INSERT INTO session_usage_dedup
-             (data_source, request_id, semantic_id, has_entry_id)
-             VALUES ('pi_session', 'request', 'semantic', 1)",
-            [],
-        )?;
-        Ok(())
-    }
-
-    #[test]
-    fn migrate_v17_to_v18_adds_byte_cursor_to_existing_sync_table() -> Result<(), AppError> {
-        // 真实升级路径：v17 库带旧 DDL 的 session_log_sync（无字节游标列，
-        // 字节游标曾短暂搭 v17 车、已执行过 v17 的开发库正是这个形状）
-        // 与存量游标行，迁移后列补上、存量行保持 NULL（首轮按行号转换）
-        let conn = Connection::open_in_memory()?;
-        conn.execute_batch(
-            "CREATE TABLE session_log_sync (
-                file_path TEXT PRIMARY KEY,
-                last_modified INTEGER NOT NULL,
-                last_line_offset INTEGER NOT NULL DEFAULT 0,
-                last_synced_at INTEGER NOT NULL
-             );
-             INSERT INTO session_log_sync VALUES ('/tmp/a.jsonl', 5, 3, 1);",
-        )?;
-        Database::set_user_version(&conn, 17)?;
-
-        Database::apply_schema_migrations_on_conn(&conn)?;
-
-        assert!(Database::has_column(
-            &conn,
-            "session_log_sync",
-            "last_byte_offset"
-        )?);
-        assert!(Database::has_column(
-            &conn,
-            "session_log_sync",
-            "last_tail_fingerprint"
-        )?);
-        let (byte_offset, fingerprint): (Option<i64>, Option<i64>) = conn.query_row(
-            "SELECT last_byte_offset, last_tail_fingerprint
-             FROM session_log_sync WHERE file_path = '/tmp/a.jsonl'",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        assert_eq!(byte_offset, None, "存量行的字节游标必须为 NULL");
-        assert_eq!(fingerprint, None, "存量行的尾部指纹必须为 NULL");
         Ok(())
     }
 }

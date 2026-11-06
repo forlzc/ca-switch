@@ -23,7 +23,6 @@ const LEVELS = [0, 1, 2, 3, 4];
 interface UsageHeatmapProps {
   /** 格子深浅按哪个指标分档：由上方指标条选 */
   metric: UsageMetric;
-  appType?: string;
   providerName?: string;
   model?: string;
   refreshIntervalMs: number;
@@ -246,7 +245,6 @@ function buildSpan(
 
 export function UsageHeatmap({
   metric,
-  appType,
   providerName,
   model,
   refreshIntervalMs,
@@ -273,7 +271,7 @@ export function UsageHeatmap({
   const locale = getLocaleFromLanguage(language);
 
   const { spanCount, trends, isLoading } = useAllSpansDailyTrends(
-    { appType, providerName, model },
+    { providerName, model },
     refreshIntervalMs,
   );
 

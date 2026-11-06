@@ -48,12 +48,6 @@ const isSupportedLanguage = (lang?: string | null): boolean => {
   );
 };
 
-const sanitizeDir = (value?: string | null): string | undefined => {
-  if (!value) return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-};
-
 export interface UseSettingsFormResult {
   settings: SettingsFormState | null;
   isLoading: boolean;
@@ -66,11 +60,6 @@ export interface UseSettingsFormResult {
 
 /**
  * useSettingsForm - 表单状态管理
- * 负责：
- * - 表单数据状态
- * - 表单字段更新
- * - 语言同步
- * - 表单重置
  */
 export function useSettingsForm(): UseSettingsFormResult {
   const { i18n } = useTranslation();
@@ -102,7 +91,6 @@ export function useSettingsForm(): UseSettingsFormResult {
     [i18n],
   );
 
-  // 初始化设置数据
   useEffect(() => {
     if (!data) return;
 
@@ -115,21 +103,7 @@ export function useSettingsForm(): UseSettingsFormResult {
       showInTray: data.showInTray ?? true,
       minimizeToTrayOnClose: data.minimizeToTrayOnClose ?? true,
       useAppWindowControls: data.useAppWindowControls ?? false,
-      enableClaudePluginIntegration:
-        data.enableClaudePluginIntegration ?? false,
       silentStartup: data.silentStartup ?? false,
-      skipClaudeOnboarding: data.skipClaudeOnboarding ?? false,
-      preserveCodexOfficialAuthOnSwitch:
-        data.preserveCodexOfficialAuthOnSwitch ?? false,
-      unifyCodexSessionHistory: data.unifyCodexSessionHistory ?? false,
-      codexStackClassicTools: data.codexStackClassicTools ?? true,
-      claudeConfigDir: sanitizeDir(data.claudeConfigDir),
-      codexConfigDir: sanitizeDir(data.codexConfigDir),
-      geminiConfigDir: sanitizeDir(data.geminiConfigDir),
-      grokConfigDir: sanitizeDir(data.grokConfigDir),
-      opencodeConfigDir: sanitizeDir(data.opencodeConfigDir),
-      openclawConfigDir: sanitizeDir(data.openclawConfigDir),
-      piConfigDir: sanitizeDir(data.piConfigDir),
       language: normalizedLanguage,
     };
 
@@ -147,11 +121,6 @@ export function useSettingsForm(): UseSettingsFormResult {
             showInTray: true,
             minimizeToTrayOnClose: true,
             useAppWindowControls: false,
-            enableClaudePluginIntegration: false,
-            skipClaudeOnboarding: false,
-            preserveCodexOfficialAuthOnSwitch: false,
-            unifyCodexSessionHistory: false,
-            codexStackClassicTools: true,
             language: readPersistedLanguage(),
           } as SettingsFormState);
 
@@ -185,21 +154,7 @@ export function useSettingsForm(): UseSettingsFormResult {
         showInTray: serverData.showInTray ?? true,
         minimizeToTrayOnClose: serverData.minimizeToTrayOnClose ?? true,
         useAppWindowControls: serverData.useAppWindowControls ?? false,
-        enableClaudePluginIntegration:
-          serverData.enableClaudePluginIntegration ?? false,
         silentStartup: serverData.silentStartup ?? false,
-        skipClaudeOnboarding: serverData.skipClaudeOnboarding ?? false,
-        preserveCodexOfficialAuthOnSwitch:
-          serverData.preserveCodexOfficialAuthOnSwitch ?? false,
-        unifyCodexSessionHistory: serverData.unifyCodexSessionHistory ?? false,
-        codexStackClassicTools: serverData.codexStackClassicTools ?? true,
-        claudeConfigDir: sanitizeDir(serverData.claudeConfigDir),
-        codexConfigDir: sanitizeDir(serverData.codexConfigDir),
-        geminiConfigDir: sanitizeDir(serverData.geminiConfigDir),
-        grokConfigDir: sanitizeDir(serverData.grokConfigDir),
-        opencodeConfigDir: sanitizeDir(serverData.opencodeConfigDir),
-        openclawConfigDir: sanitizeDir(serverData.openclawConfigDir),
-        piConfigDir: sanitizeDir(serverData.piConfigDir),
         language: normalizedLanguage,
       };
 

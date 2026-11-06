@@ -6,6 +6,7 @@ import {
   deeplinkApi,
 } from "@/lib/api/deeplink";
 import { providersApi } from "@/lib/api";
+import type { AppId } from "@/lib/api/types";
 import { parseDeepLinkConfigPreview } from "@/utils/deepLinkConfigPreview";
 import {
   Dialog,
@@ -19,7 +20,6 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/lib/toast";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
-import { PromptConfirmation } from "./deeplink/PromptConfirmation";
 import { ProviderIcon } from "./ProviderIcon";
 import {
   classifyEndpoint,
@@ -30,7 +30,7 @@ import {
 } from "@/utils/deeplinkRisk";
 import { decodeBase64Utf8 } from "@/lib/utils/base64";
 import { Switch } from "@/components/ui/switch";
-import { getAppLabel, isAdditiveAppId } from "@/config/appConfig";
+import { APP_DISPLAY_NAME } from "@/components/shell/AppGlyph";
 import { normalizeIconDataUri } from "@/utils/customIcon";
 import {
   CODING_PLAN_PROVIDERS,
@@ -69,15 +69,6 @@ async function loadLinkIcon(url: string): Promise<string | undefined> {
  * 一直是写进去的，初始值保持打开；切换式应用和提示词默认关闭。
  */
 function initialActivation(request: DeepLinkImportRequest): boolean {
-  // Antigravity 的卡没有「启用」，只导入（后端同样忽略 enabled）
-  if (request.resource === "provider" && request.app === "agy") return false;
-  if (
-    request.resource === "provider" &&
-    request.app &&
-    isAdditiveAppId(request.app)
-  ) {
-    return request.enabled ?? true;
-  }
   return request.enabled === true;
 }
 
@@ -230,7 +221,7 @@ export function DeepLinkImportDialog() {
     try {
       // 供应商和提示词的「立即生效」由用户在确认框里决定，覆盖链接里的值
       let payload: DeepLinkImportRequest =
-        request.resource === "provider" || request.resource === "prompt"
+        request.resource === "provider"
           ? { ...request, enabled: activateAfterImport }
           : request;
       if (request.resource === "provider" && request.iconUrl) {
@@ -248,30 +239,9 @@ export function DeepLinkImportDialog() {
           await queryClient.invalidateQueries({
             queryKey: ["providers", request.app],
           });
-          if (request.app === "opencode") {
-            await queryClient.invalidateQueries({
-              queryKey: ["opencodeLiveProviderIds"],
-            });
-            await queryClient.invalidateQueries({
-              queryKey: ["opencode", "runtime-models"],
-            });
-          }
           await refreshTrayMenu();
           toast.success(t("deeplink.importSuccess"), {
             description: t("deeplink.importSuccessDescription", {
-              name: request.name,
-            }),
-            closeButton: true,
-          });
-        } else if (result.type === "prompt") {
-          // Prompts don't use React Query, trigger a custom event for refresh
-          window.dispatchEvent(
-            new CustomEvent("prompt-imported", {
-              detail: { app: request.app },
-            }),
-          );
-          toast.success(t("deeplink.promptImportSuccess"), {
-            description: t("deeplink.promptImportSuccessDescription", {
               name: request.name,
             }),
             closeButton: true,
@@ -368,23 +338,11 @@ export function DeepLinkImportDialog() {
   };
 
   const getTitle = () => {
-    if (!request) return t("deeplink.confirmImport");
-    switch (request.resource) {
-      case "prompt":
-        return t("deeplink.importPrompt");
-      default:
-        return t("deeplink.confirmImport");
-    }
+    return t("deeplink.confirmImport");
   };
 
   const getDescription = () => {
-    if (!request) return t("deeplink.confirmImportDescription");
-    switch (request.resource) {
-      case "prompt":
-        return t("deeplink.importPromptDescription");
-      default:
-        return t("deeplink.confirmImportDescription");
-    }
+    return t("deeplink.confirmImportDescription");
   };
 
   return (
@@ -400,14 +358,6 @@ export function DeepLinkImportDialog() {
 
             {/* 主体内容整体右移，略大于标题内边距，让内容看起来不贴边 */}
             <div className="space-y-4 px-8 py-4 max-h-[60vh] overflow-y-auto [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar]:block [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-subtle">
-              {request.resource === "prompt" && (
-                <PromptConfirmation
-                  request={request}
-                  enableAfterImport={activateAfterImport}
-                  onEnableAfterImportChange={setActivateAfterImport}
-                />
-              )}
-
               {/* Legacy Provider View */}
               {(request.resource === "provider" || !request.resource) && (
                 <>
@@ -430,7 +380,7 @@ export function DeepLinkImportDialog() {
                       {t("deeplink.app")}
                     </div>
                     <div className="col-span-2 text-sm font-medium capitalize">
-                      {request.app}
+                      {APP_DISPLAY_NAME[request.app as AppId] ?? request.app}
                     </div>
                   </div>
 
@@ -504,11 +454,8 @@ export function DeepLinkImportDialog() {
                     </div>
                   </div>
 
-                  {/* Model Fields - 根据应用类型显示不同的模型字段 */}
-                  {request.app === "claude" ? (
-                    <>
-                      {/* Claude 四种模型字段 */}
-                      {request.haikuModel && (
+                  {/* Model Fields */}
+                  {request.haikuModel && (
                         <div className="grid grid-cols-3 items-center gap-4">
                           <div className="font-medium text-sm text-fg-2">
                             {t("deeplink.haikuModel")}
@@ -548,22 +495,6 @@ export function DeepLinkImportDialog() {
                           </div>
                         </div>
                       )}
-                    </>
-                  ) : (
-                    <>
-                      {/* Codex 和 Gemini 使用通用 model 字段 */}
-                      {request.model && (
-                        <div className="grid grid-cols-3 items-center gap-4">
-                          <div className="font-medium text-sm text-fg-2">
-                            {t("deeplink.model")}
-                          </div>
-                          <div className="col-span-2 text-sm font-mono">
-                            {request.model}
-                          </div>
-                        </div>
-                      )}
-                    </>
-                  )}
 
                   {request.apiFormat && (
                     <div className="grid grid-cols-3 items-center gap-4">
@@ -621,72 +552,6 @@ export function DeepLinkImportDialog() {
                           {parsedConfig.type === "claude" &&
                             parsedConfig.env && (
                               <div className="space-y-1.5">
-                                {Object.entries(parsedConfig.env).map(
-                                  ([key, value]) => (
-                                    <EnvRow
-                                      key={key}
-                                      envKey={key}
-                                      value={String(value)}
-                                    />
-                                  ),
-                                )}
-                              </div>
-                            )}
-
-                          {/* Codex config */}
-                          {(parsedConfig.type === "codex" ||
-                            parsedConfig.type === "grokbuild") && (
-                            <div className="space-y-2">
-                              {parsedConfig.type === "codex" &&
-                                parsedConfig.auth &&
-                                Object.keys(parsedConfig.auth).length > 0 && (
-                                  <div className="space-y-1.5">
-                                    <div className="text-xs text-fg-2">
-                                      Auth:
-                                    </div>
-                                    <div className="pl-2 space-y-1.5">
-                                      {Object.entries(parsedConfig.auth).map(
-                                        ([key, value]) => (
-                                          <EnvRow
-                                            key={key}
-                                            envKey={key}
-                                            value={String(value)}
-                                          />
-                                        ),
-                                      )}
-                                    </div>
-                                  </div>
-                                )}
-                              {parsedConfig.tomlConfig && (
-                                <div className="space-y-1">
-                                  <div className="text-xs text-fg-2">
-                                    TOML Config:
-                                  </div>
-                                  <pre className="text-xs font-mono bg-surface p-2 rounded overflow-auto max-h-24 whitespace-pre-wrap break-all">
-                                    {parsedConfig.tomlConfig}
-                                  </pre>
-                                  {/* 后端按白名单收（deeplink/codex_link.rs、grok_link.rs），原文不会整份导入 */}
-                                  <p className="text-xs text-fg-2">
-                                    {parsedConfig.type === "codex"
-                                      ? t("deeplink.codexConfigScopeHint")
-                                      : t("deeplink.grokConfigScopeHint")}
-                                  </p>
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          {/* Gemini config */}
-                          {(parsedConfig.type === "gemini" ||
-                            parsedConfig.type === "agy") &&
-                            parsedConfig.env && (
-                              <div className="space-y-1.5">
-                                {parsedConfig.model && (
-                                  <EnvRow
-                                    envKey="model"
-                                    value={parsedConfig.model}
-                                  />
-                                )}
                                 {Object.entries(parsedConfig.env).map(
                                   ([key, value]) => (
                                     <EnvRow
@@ -886,40 +751,28 @@ export function DeepLinkImportDialog() {
                     </div>
                   )}
 
-                  {/* Antigravity 的卡没有「启用」，只导入，不给这个开关 */}
-                  {request.app !== "agy" && (
-                    <>
-                      {/*
-                        导入后是否立即生效由用户决定，链接里的 enabled 只是初始值。切换式应用打开后
-                        会立即切到这家，客户端流量随之改走链接里的地址，所以打开时要给出提示。
-                      */}
-                      <div className="flex items-center justify-between gap-4 pt-2 border-t border-border">
-                        <label
-                          htmlFor="deeplink-activate-after-import"
-                          className="text-sm font-medium"
-                        >
-                          {request.app && isAdditiveAppId(request.app)
-                            ? request.app === "pi"
-                              ? t("deeplink.enableInPiAfterImport")
-                              : t("deeplink.addToAppAfterImport", {
-                                  app: getAppLabel(request.app),
-                                })
-                            : t("deeplink.switchAfterImport")}
-                        </label>
-                        <Switch
-                          id="deeplink-activate-after-import"
-                          checked={activateAfterImport}
-                          onCheckedChange={setActivateAfterImport}
-                        />
-                      </div>
-                      {activateAfterImport &&
-                        !(request.app && isAdditiveAppId(request.app)) && (
-                          <div className="text-warning-text text-sm flex items-start gap-2">
-                            <span aria-hidden="true">⚠️</span>
-                            <span>{t("deeplink.providerEnabledWarning")}</span>
-                          </div>
-                        )}
-                    </>
+                  {/*
+                    导入后是否立即生效由用户决定，链接里的 enabled 只是初始值。切换式应用打开后
+                    会立即切到这家，客户端流量随之改走链接里的地址，所以打开时要给出提示。
+                  */}
+                  <div className="flex items-center justify-between gap-4 pt-2 border-t border-border">
+                    <label
+                      htmlFor="deeplink-activate-after-import"
+                      className="text-sm font-medium"
+                    >
+                      {t("deeplink.switchAfterImport")}
+                    </label>
+                    <Switch
+                      id="deeplink-activate-after-import"
+                      checked={activateAfterImport}
+                      onCheckedChange={setActivateAfterImport}
+                    />
+                  </div>
+                  {activateAfterImport && (
+                    <div className="text-warning-text text-sm flex items-start gap-2">
+                      <span aria-hidden="true">⚠️</span>
+                      <span>{t("deeplink.providerEnabledWarning")}</span>
+                    </div>
                   )}
 
                   {/* Warning */}

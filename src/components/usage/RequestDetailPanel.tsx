@@ -19,10 +19,8 @@ import { cn } from "@/lib/utils";
 import { useMoneyFormat } from "@/hooks/useMoneyFormat";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import {
-  SPEED_ESTIMATE_MIN_OUTPUT_TOKENS,
   SPEED_MIN_OUTPUT_TOKENS,
   fmtInt,
-  formatEstimatedTokensPerSecond,
   formatOutputTokensPerSecond,
   getLocaleFromLanguage,
   getResolvedLang,
@@ -92,9 +90,7 @@ function useDetailSections(request: RequestLog) {
   const isCacheInclusive = request.inputTokens !== freshInput;
   const unpriced = isUnpricedUsage(request);
   const multiplier = parseFiniteNumber(request.costMultiplier);
-  const isProxy = !request.dataSource || request.dataSource === "proxy";
   const tps = formatOutputTokensPerSecond(request);
-  const estimatedTps = formatEstimatedTokensPerSecond(request);
   const latency = parseFiniteNumber(request.latencyMs);
   const firstToken = parseFiniteNumber(request.firstTokenMs);
 
@@ -116,15 +112,12 @@ function useDetailSections(request: RequestLog) {
     },
     { key: "model", label: t("usage.model"), value: request.model, mono: true },
   ];
-  // 会话日志的供应商就叫「会话日志」，ID 是内部的 _session：不再重复列「供应商 ID」和「来源」
-  if (isProxy) {
-    basic.splice(3, 0, {
-      key: "providerId",
-      label: t("usage.detail.providerId"),
-      value: request.providerId,
-      mono: true,
-    });
-  }
+  basic.splice(3, 0, {
+    key: "providerId",
+    label: t("usage.detail.providerId"),
+    value: request.providerId,
+    mono: true,
+  });
   if (request.requestModel && request.requestModel !== request.model) {
     basic.push({
       key: "requestModel",
@@ -141,14 +134,11 @@ function useDetailSections(request: RequestLog) {
       mono: true,
     });
   }
-  if (isProxy) {
-    basic.push({
-      key: "source",
-      label: t("usage.detail.source"),
-      value: t("usage.detail.sourceProxy", { code: request.statusCode }),
-      title: request.dataSource ?? "proxy",
-    });
-  }
+  basic.push({
+    key: "source",
+    label: t("usage.detail.source"),
+    value: t("usage.detail.sourceProxy", { code: request.statusCode }),
+  });
   basic.push({
     key: "requestId",
     label: t("usage.requestId"),
@@ -222,95 +212,48 @@ function useDetailSections(request: RequestLog) {
     title: unpriced ? undefined : moneyTitle(request.totalCostUsd, 6),
   });
 
-  let performance: DetailRow[];
-  if (!isProxy) {
-    // 会话日志的耗时和首字是导入时按日志时间戳估的（耗时 0 = 没估出来）
-    if (latency == null || latency <= 0) {
-      performance = [
-        {
+  const speedRow: DetailRow =
+    tps != null
+      ? {
           key: "speed",
           label: t("usage.speed"),
-          value: t("usage.detail.noTimingSession"),
-          muted: true,
-        },
-      ];
-    } else {
-      performance = [
-        estimatedTps != null
+          value: t("usage.speedValue", { value: tps }),
+        }
+      : firstToken == null
+        ? {
+            key: "speed",
+            label: t("usage.speed"),
+            value: t("usage.detail.noFirstToken"),
+            muted: true,
+          }
+        : request.outputTokens < SPEED_MIN_OUTPUT_TOKENS
           ? {
               key: "speed",
               label: t("usage.speed"),
-              value: t("usage.speedEstimatedValue", { value: estimatedTps }),
+              value: t("usage.detail.speedTooFew"),
+              muted: true,
             }
           : {
               key: "speed",
               label: t("usage.speed"),
-              value:
-                request.outputTokens < SPEED_ESTIMATE_MIN_OUTPUT_TOKENS
-                  ? t("usage.detail.speedEstimateTooFew")
-                  : "—",
+              value: "—",
               muted: true,
-            },
-        {
-          key: "duration",
-          label: t("usage.detail.durationEstimated"),
-          value: `${(latency / 1000).toFixed(1)}s`,
-          title: `${fmtInt(latency, locale)} ms`,
-        },
-      ];
-      // 首字也是按时间戳推出来的；第一块不是思考、或 Codex 一开头就调工具时推不出来
-      if (firstToken != null) {
-        performance.splice(1, 0, {
-          key: "ttft",
-          label: t("usage.detail.firstTokenEstimated"),
-          value: `${(firstToken / 1000).toFixed(1)}s`,
-        });
-      }
-    }
-  } else {
-    const speedRow: DetailRow =
-      tps != null
-        ? {
-            key: "speed",
-            label: t("usage.speed"),
-            value: t("usage.speedValue", { value: tps }),
-          }
-        : firstToken == null
-          ? {
-              key: "speed",
-              label: t("usage.speed"),
-              value: t("usage.detail.noFirstToken"),
-              muted: true,
-            }
-          : request.outputTokens < SPEED_MIN_OUTPUT_TOKENS
-            ? {
-                key: "speed",
-                label: t("usage.speed"),
-                value: t("usage.detail.speedTooFew"),
-                muted: true,
-              }
-            : {
-                key: "speed",
-                label: t("usage.speed"),
-                value: "—",
-                muted: true,
-              };
-    performance = [speedRow];
-    if (firstToken != null) {
-      performance.push({
-        key: "ttft",
-        label: t("usage.detail.firstToken"),
-        value: `${(firstToken / 1000).toFixed(1)}s`,
-      });
-    }
-    if (latency != null) {
-      performance.push({
-        key: "duration",
-        label: t("usage.detail.duration"),
-        value: `${(latency / 1000).toFixed(1)}s`,
-        title: `${fmtInt(latency, locale)} ms`,
-      });
-    }
+            };
+  const performance: DetailRow[] = [speedRow];
+  if (firstToken != null) {
+    performance.push({
+      key: "ttft",
+      label: t("usage.detail.firstToken"),
+      value: `${(firstToken / 1000).toFixed(1)}s`,
+    });
+  }
+  if (latency != null) {
+    performance.push({
+      key: "duration",
+      label: t("usage.detail.duration"),
+      value: `${(latency / 1000).toFixed(1)}s`,
+      title: `${fmtInt(latency, locale)} ms`,
+    });
   }
 
   return { basic, tokens, cost, performance };

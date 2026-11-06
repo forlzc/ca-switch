@@ -9,30 +9,11 @@ pub struct PromptConfig {
     pub prompts: HashMap<String, crate::prompt::Prompt>,
 }
 
-/// Prompt 根：按客户端分开维护
+/// Prompt 根：只维护唯一的 API 应用
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PromptRoot {
     #[serde(default)]
     pub claude: PromptConfig,
-    #[serde(
-        rename = "claude-desktop",
-        alias = "claudeDesktop",
-        alias = "claude_desktop",
-        default
-    )]
-    pub claude_desktop: PromptConfig,
-    #[serde(default)]
-    pub codex: PromptConfig,
-    #[serde(default)]
-    pub gemini: PromptConfig,
-    #[serde(default)]
-    pub grokbuild: PromptConfig,
-    #[serde(default)]
-    pub opencode: PromptConfig,
-    #[serde(default)]
-    pub openclaw: PromptConfig,
-    #[serde(default)]
-    pub hermes: PromptConfig,
 }
 
 use crate::config::{copy_file, get_app_config_dir, get_app_config_path, write_json_file};
@@ -40,103 +21,39 @@ use crate::error::AppError;
 use crate::prompt_files::prompt_file_path;
 use crate::provider::ProviderManager;
 
-/// 应用类型
+/// 应用类型：收敛为唯一的 API（Anthropic）代理入口
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AppType {
+    #[serde(alias = "anthropic")]
     Claude,
-    #[serde(
-        rename = "claude-desktop",
-        alias = "claude_desktop",
-        alias = "claudeDesktop"
-    )]
-    ClaudeDesktop,
-    Codex,
-    Gemini,
-    GrokBuild,
-    OpenCode,
-    OpenClaw,
-    Hermes,
-    Pi,
-    Mcode,
-    Kimi,
-    Dsh,
-    Agy,
-    Omp,
 }
 
 impl AppType {
     pub fn as_str(&self) -> &str {
         match self {
             AppType::Claude => "claude",
-            AppType::ClaudeDesktop => "claude-desktop",
-            AppType::Codex => "codex",
-            AppType::Gemini => "gemini",
-            AppType::GrokBuild => "grokbuild",
-            AppType::OpenCode => "opencode",
-            AppType::OpenClaw => "openclaw",
-            AppType::Hermes => "hermes",
-            AppType::Pi => "pi",
-            AppType::Mcode => "mcode",
-            AppType::Kimi => "kimi",
-            AppType::Dsh => "dsh",
-            AppType::Agy => "agy",
-            AppType::Omp => "omp",
         }
     }
 
-    /// Check if this app uses additive mode
-    ///
-    /// - Switch mode (false): Only the current provider is written to live config (Claude, Codex, Gemini)
-    /// - Additive mode (true): Providers coexist in native config and can be enabled independently
-    ///   (OpenCode, OpenClaw, Hermes, Pi)
+    /// 不再存在累加模式应用。
     pub fn is_additive_mode(&self) -> bool {
-        matches!(
-            self,
-            AppType::OpenCode
-                | AppType::OpenClaw
-                | AppType::Hermes
-                | AppType::Pi
-                | AppType::Mcode
-                | AppType::Kimi
-                | AppType::Dsh
-                | AppType::Omp
-        )
+        false
     }
 
+    /// 唯一的 API 入口支持本地代理。
     pub fn supports_local_proxy(&self) -> bool {
-        matches!(
-            self,
-            AppType::Claude | AppType::Codex | AppType::Gemini | AppType::GrokBuild
-        )
+        true
     }
 
-    /// 有设备级的直连 / 路由模式（`live-state.json`，`mode::controller`）：本地路由的四个应用，
-    /// 加上 Claude Desktop。Desktop 经同一个路由服务转发，但没有 `proxy_config` 行、不做故障
-    /// 转移，所以不算 [`Self::supports_local_proxy`]。
+    /// 唯一的 API 入口具备设备级直连 / 路由模式。
     pub fn has_route_mode(&self) -> bool {
-        self.supports_local_proxy() || matches!(self, AppType::ClaudeDesktop)
+        true
     }
 
     /// Return an iterator over all app types
     pub fn all() -> impl Iterator<Item = AppType> {
-        [
-            AppType::Claude,
-            AppType::ClaudeDesktop,
-            AppType::Codex,
-            AppType::Gemini,
-            AppType::GrokBuild,
-            AppType::OpenCode,
-            AppType::OpenClaw,
-            AppType::Hermes,
-            AppType::Pi,
-            AppType::Mcode,
-            AppType::Kimi,
-            AppType::Dsh,
-            AppType::Agy,
-            AppType::Omp,
-        ]
-        .into_iter()
+        [AppType::Claude].into_iter()
     }
 }
 
@@ -146,90 +63,32 @@ impl FromStr for AppType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let normalized = s.trim().to_lowercase();
         match normalized.as_str() {
-            "claude" => Ok(AppType::Claude),
-            "claude-desktop" | "claude_desktop" | "claudedesktop" => Ok(AppType::ClaudeDesktop),
-            "codex" => Ok(AppType::Codex),
-            "gemini" => Ok(AppType::Gemini),
-            "grokbuild" | "grok-build" | "grok_build" | "grok" => Ok(AppType::GrokBuild),
-            "opencode" => Ok(AppType::OpenCode),
-            "openclaw" => Ok(AppType::OpenClaw),
-            "hermes" => Ok(AppType::Hermes),
-            "pi" => Ok(AppType::Pi),
-            "mcode" => Ok(AppType::Mcode),
-            "kimi" | "kimi-code" => Ok(AppType::Kimi),
-            "dsh" | "deepseek-harness" => Ok(AppType::Dsh),
-            "agy" | "antigravity" | "antigravity-cli" => Ok(AppType::Agy),
-            "omp" | "oh-my-pi" | "oh_my_pi" | "ohmypi" => Ok(AppType::Omp),
+            "claude" | "anthropic" => Ok(AppType::Claude),
             other => Err(AppError::localized(
                 "unsupported_app",
-                format!("不支持的应用标识: '{other}'。可选值: claude, claude-desktop, codex, gemini, grokbuild, opencode, openclaw, hermes, pi, mcode, kimi, dsh, agy, omp。"),
-                format!("Unsupported app id: '{other}'. Allowed: claude, claude-desktop, codex, gemini, grokbuild, opencode, openclaw, hermes, pi, mcode, kimi, dsh, agy, omp."),
+                format!("不支持的应用标识: '{other}'。可选值: claude、anthropic。"),
+                format!("Unsupported app id: '{other}'. Allowed: claude, anthropic."),
             )),
         }
     }
 }
 
-/// 通用配置片段（按应用分治）
+/// 通用配置片段（只有唯一的 API 应用）
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CommonConfigSnippets {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude: Option<String>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub codex: Option<String>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gemini: Option<String>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub opencode: Option<String>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub openclaw: Option<String>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hermes: Option<String>,
 }
 
 impl CommonConfigSnippets {
-    /// 获取指定应用的通用配置片段
-    pub fn get(&self, app: &AppType) -> Option<&String> {
-        match app {
-            AppType::Claude => self.claude.as_ref(),
-            AppType::ClaudeDesktop => None,
-            AppType::Codex => self.codex.as_ref(),
-            AppType::Gemini => self.gemini.as_ref(),
-            AppType::GrokBuild => None,
-            AppType::OpenCode => self.opencode.as_ref(),
-            AppType::OpenClaw => self.openclaw.as_ref(),
-            AppType::Hermes => self.hermes.as_ref(),
-            AppType::Pi
-            | AppType::Mcode
-            | AppType::Kimi
-            | AppType::Dsh
-            | AppType::Omp
-            | AppType::Agy => None,
-        }
+    /// 获取通用配置片段
+    pub fn get(&self, _app: &AppType) -> Option<&String> {
+        self.claude.as_ref()
     }
 
-    /// 设置指定应用的通用配置片段
-    pub fn set(&mut self, app: &AppType, snippet: Option<String>) {
-        match app {
-            AppType::Claude => self.claude = snippet,
-            AppType::ClaudeDesktop => {}
-            AppType::Codex => self.codex = snippet,
-            AppType::Gemini => self.gemini = snippet,
-            AppType::GrokBuild => {}
-            AppType::OpenCode => self.opencode = snippet,
-            AppType::OpenClaw => self.openclaw = snippet,
-            AppType::Hermes => self.hermes = snippet,
-            AppType::Pi
-            | AppType::Mcode
-            | AppType::Kimi
-            | AppType::Dsh
-            | AppType::Omp
-            | AppType::Agy => {}
-        }
+    /// 设置通用配置片段
+    pub fn set(&mut self, _app: &AppType, snippet: Option<String>) {
+        self.claude = snippet;
     }
 }
 
@@ -266,14 +125,6 @@ impl Default for MultiAppConfig {
     fn default() -> Self {
         let mut apps = HashMap::new();
         apps.insert("claude".to_string(), ProviderManager::default());
-        apps.insert("claude-desktop".to_string(), ProviderManager::default());
-        apps.insert("codex".to_string(), ProviderManager::default());
-        apps.insert("gemini".to_string(), ProviderManager::default());
-        apps.insert("grokbuild".to_string(), ProviderManager::default());
-        apps.insert("opencode".to_string(), ProviderManager::default());
-        apps.insert("openclaw".to_string(), ProviderManager::default());
-        apps.insert("hermes".to_string(), ProviderManager::default());
-        apps.insert("agy".to_string(), ProviderManager::default());
 
         Self {
             version: 2,
@@ -329,11 +180,11 @@ impl MultiAppConfig {
             serde_json::from_value(value).map_err(|e| AppError::json(&config_path, e))?;
         let mut updated = false;
 
-        // 确保 gemini 应用存在（兼容旧配置文件）
-        if !config.apps.contains_key("gemini") {
+        // 确保唯一的应用存在（兼容旧配置文件）
+        if !config.apps.contains_key("claude") {
             config
                 .apps
-                .insert("gemini".to_string(), ProviderManager::default());
+                .insert("claude".to_string(), ProviderManager::default());
             updated = true;
         }
 
@@ -400,14 +251,8 @@ impl MultiAppConfig {
 
         let mut config = Self::default();
 
-        // 为每个应用尝试自动导入提示词
+        // 尝试自动导入唯一的 API 应用提示词
         Self::auto_import_prompt_if_exists(&mut config, AppType::Claude)?;
-        Self::auto_import_prompt_if_exists(&mut config, AppType::Codex)?;
-        Self::auto_import_prompt_if_exists(&mut config, AppType::Gemini)?;
-        Self::auto_import_prompt_if_exists(&mut config, AppType::GrokBuild)?;
-        Self::auto_import_prompt_if_exists(&mut config, AppType::OpenCode)?;
-        Self::auto_import_prompt_if_exists(&mut config, AppType::OpenClaw)?;
-        Self::auto_import_prompt_if_exists(&mut config, AppType::Hermes)?;
 
         Ok(config)
     }
@@ -423,38 +268,14 @@ impl MultiAppConfig {
     /// - Ok(true)  表示至少有一个应用成功导入了提示词
     /// - Ok(false) 表示无需导入或未导入任何内容
     fn maybe_auto_import_prompts_for_existing_config(&mut self) -> Result<bool, AppError> {
-        // 如果任一应用已经有提示词配置，说明用户已经在使用 Prompt 功能，避免再次自动导入
-        if !self.prompts.claude.prompts.is_empty()
-            || !self.prompts.claude_desktop.prompts.is_empty()
-            || !self.prompts.codex.prompts.is_empty()
-            || !self.prompts.gemini.prompts.is_empty()
-            || !self.prompts.grokbuild.prompts.is_empty()
-            || !self.prompts.opencode.prompts.is_empty()
-            || !self.prompts.openclaw.prompts.is_empty()
-            || !self.prompts.hermes.prompts.is_empty()
-        {
+        // 如果已经有提示词配置，说明用户已经在使用 Prompt 功能，避免再次自动导入
+        if !self.prompts.claude.prompts.is_empty() {
             return Ok(false);
         }
 
         log::info!("检测到已存在配置文件且 Prompt 列表为空，将尝试从现有提示词文件自动导入");
 
-        let mut imported = false;
-        for app in [
-            AppType::Claude,
-            AppType::Codex,
-            AppType::Gemini,
-            AppType::GrokBuild,
-            AppType::OpenCode,
-            AppType::OpenClaw,
-            AppType::Hermes,
-        ] {
-            // 复用已有的单应用导入逻辑
-            if Self::auto_import_prompt_if_exists(self, app)? {
-                imported = true;
-            }
-        }
-
-        Ok(imported)
+        Self::auto_import_prompt_if_exists(self, AppType::Claude)
     }
 
     /// 检查并自动导入单个应用的提示词文件
@@ -511,24 +332,9 @@ impl MultiAppConfig {
             updated_at: Some(timestamp),
         };
 
-        // 插入到对应的应用配置中
+        // 插入到唯一的应用配置中
         let prompts = match app {
             AppType::Claude => &mut config.prompts.claude.prompts,
-            AppType::ClaudeDesktop => &mut config.prompts.claude_desktop.prompts,
-            AppType::Codex => &mut config.prompts.codex.prompts,
-            AppType::Gemini => &mut config.prompts.gemini.prompts,
-            AppType::GrokBuild => &mut config.prompts.grokbuild.prompts,
-            AppType::OpenCode => &mut config.prompts.opencode.prompts,
-            AppType::OpenClaw => &mut config.prompts.openclaw.prompts,
-            AppType::Hermes => &mut config.prompts.hermes.prompts,
-            // Pi was added after prompts moved to SQLite. Keeping it out of
-            // this legacy config avoids a second, unused prompt state.
-            AppType::Pi
-            | AppType::Mcode
-            | AppType::Kimi
-            | AppType::Dsh
-            | AppType::Omp
-            | AppType::Agy => return Ok(false),
         };
 
         prompts.insert(id, prompt);
@@ -547,30 +353,10 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn app_type_parses_claude_desktop_aliases() {
-        assert_eq!(
-            "claude-desktop".parse::<AppType>().unwrap(),
-            AppType::ClaudeDesktop
-        );
-        assert_eq!(
-            "claude_desktop".parse::<AppType>().unwrap(),
-            AppType::ClaudeDesktop
-        );
-        assert_eq!(
-            "claudeDesktop".parse::<AppType>().unwrap(),
-            AppType::ClaudeDesktop
-        );
-        assert_eq!(AppType::ClaudeDesktop.as_str(), "claude-desktop");
-    }
-
-    #[test]
-    fn app_type_parses_omp_aliases() {
-        assert_eq!("omp".parse::<AppType>().unwrap(), AppType::Omp);
-        assert_eq!("oh-my-pi".parse::<AppType>().unwrap(), AppType::Omp);
-        assert_eq!("oh_my_pi".parse::<AppType>().unwrap(), AppType::Omp);
-        assert_eq!("ohmypi".parse::<AppType>().unwrap(), AppType::Omp);
-        assert_eq!("OMP".parse::<AppType>().unwrap(), AppType::Omp);
-        assert_eq!(AppType::Omp.as_str(), "omp");
+    fn app_type_parses_claude_and_anthropic_aliases() {
+        assert_eq!("claude".parse::<AppType>().unwrap(), AppType::Claude);
+        assert_eq!("anthropic".parse::<AppType>().unwrap(), AppType::Claude);
+        assert_eq!(AppType::Claude.as_str(), "claude");
     }
 
     struct TempHome {
@@ -704,99 +490,4 @@ mod tests {
         );
     }
 
-    #[test]
-    #[serial]
-    fn auto_imports_gemini_prompt_on_first_launch() {
-        let _home = TempHome::new();
-        write_prompt_file(AppType::Gemini, "# Gemini Prompt\n\nTest content");
-
-        let config = MultiAppConfig::load().expect("load config");
-
-        assert_eq!(config.prompts.gemini.prompts.len(), 1);
-        let prompt = config
-            .prompts
-            .gemini
-            .prompts
-            .values()
-            .next()
-            .expect("gemini prompt exists");
-        assert!(prompt.enabled, "gemini prompt should be enabled");
-        assert_eq!(prompt.content, "# Gemini Prompt\n\nTest content");
-        assert_eq!(
-            prompt.description,
-            Some("Automatically imported on first launch".to_string())
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn auto_imports_grokbuild_prompt_on_first_launch() {
-        let _home = TempHome::new();
-        write_prompt_file(AppType::GrokBuild, "# Grok Build Prompt\n\nTest content");
-
-        let config = MultiAppConfig::load().expect("load config");
-
-        assert_eq!(config.prompts.grokbuild.prompts.len(), 1);
-        let prompt = config
-            .prompts
-            .grokbuild
-            .prompts
-            .values()
-            .next()
-            .expect("grokbuild prompt exists");
-        assert!(prompt.enabled, "grokbuild prompt should be enabled");
-        assert_eq!(prompt.content, "# Grok Build Prompt\n\nTest content");
-        assert_eq!(
-            prompt.description,
-            Some("Automatically imported on first launch".to_string())
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn auto_imports_all_three_apps_prompts() {
-        let _home = TempHome::new();
-        write_prompt_file(AppType::Claude, "# Claude prompt");
-        write_prompt_file(AppType::Codex, "# Codex prompt");
-        write_prompt_file(AppType::Gemini, "# Gemini prompt");
-
-        let config = MultiAppConfig::load().expect("load config");
-
-        // 验证所有三个应用的提示词都被导入
-        assert_eq!(config.prompts.claude.prompts.len(), 1);
-        assert_eq!(config.prompts.codex.prompts.len(), 1);
-        assert_eq!(config.prompts.gemini.prompts.len(), 1);
-
-        // 验证所有提示词都被启用
-        assert!(
-            config
-                .prompts
-                .claude
-                .prompts
-                .values()
-                .next()
-                .unwrap()
-                .enabled
-        );
-        assert!(
-            config
-                .prompts
-                .codex
-                .prompts
-                .values()
-                .next()
-                .unwrap()
-                .enabled
-        );
-        assert!(
-            config
-                .prompts
-                .gemini
-                .prompts
-                .values()
-                .next()
-                .unwrap()
-                .enabled
-        );
-    }
 }

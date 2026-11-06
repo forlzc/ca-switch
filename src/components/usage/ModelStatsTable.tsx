@@ -17,7 +17,6 @@ import { useMoneyFormat } from "@/hooks/useMoneyFormat";
 
 interface ModelStatsTableProps {
   range: UsageRangeSelection;
-  appType?: string;
   providerName?: string;
   model?: string;
   refreshIntervalMs: number;
@@ -25,7 +24,6 @@ interface ModelStatsTableProps {
 
 export function ModelStatsTable({
   range,
-  appType,
   providerName,
   model,
   refreshIntervalMs,
@@ -35,7 +33,7 @@ export function ModelStatsTable({
   const locale = getLocaleFromLanguage(getResolvedLang(i18n));
   const { data: stats, isLoading } = useModelStats(
     range,
-    { appType, providerName, model },
+    { providerName, model },
     {
       refetchInterval: refreshIntervalMs > 0 ? refreshIntervalMs : false,
     },
@@ -47,7 +45,7 @@ export function ModelStatsTable({
   );
   const pagination = useClientPagination(
     rows,
-    JSON.stringify([range, appType, providerName, model]),
+    JSON.stringify([range, providerName, model]),
   );
 
   if (isLoading) {

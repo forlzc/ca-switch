@@ -5,7 +5,6 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::app_config::AppType;
-use crate::codex_config;
 use crate::config::{self, get_claude_settings_path, ConfigStatus};
 use crate::settings;
 use crate::store::AppState;
@@ -30,35 +29,14 @@ fn invalid_json_format_error(error: serde_json::Error) -> String {
     }
 }
 
-fn invalid_toml_format_error(error: toml_edit::TomlError) -> String {
-    let lang = settings::get_settings()
-        .language
-        .unwrap_or_else(|| "zh".to_string());
-
-    match lang.as_str() {
-        "en" => format!("Invalid TOML format: {error}"),
-        "tr" => format!("Geçersiz TOML biçimi: {error}"),
-        "ja" => format!("TOML形式が無効です: {error}"),
-        _ => format!("无效的 TOML 格式: {error}"),
-    }
-}
-
 fn validate_common_config_snippet(app_type: &str, snippet: &str) -> Result<(), String> {
     if snippet.trim().is_empty() {
         return Ok(());
     }
 
-    match app_type {
-        "claude" | "gemini" | "omo" | "omo-slim" => {
-            serde_json::from_str::<serde_json::Value>(snippet)
-                .map_err(invalid_json_format_error)?;
-        }
-        "codex" => {
-            snippet
-                .parse::<toml_edit::DocumentMut>()
-                .map_err(invalid_toml_format_error)?;
-        }
-        _ => {}
+    if app_type == "claude" {
+        serde_json::from_str::<serde_json::Value>(snippet)
+            .map_err(invalid_json_format_error)?;
     }
 
     Ok(())
@@ -69,126 +47,9 @@ pub async fn get_config_status(
     state: State<'_, AppState>,
     app: String,
 ) -> Result<ConfigStatus, String> {
+    let _ = &state;
     match AppType::from_str(&app).map_err(|e| e.to_string())? {
         AppType::Claude => Ok(config::get_claude_config_status()),
-        AppType::ClaudeDesktop => {
-            let status = crate::claude_desktop_config::get_status(
-                state.db.as_ref(),
-                state.proxy_service.is_running().await,
-            )
-            .map_err(|e| e.to_string())?;
-            Ok(ConfigStatus {
-                exists: status.configured,
-                path: status.config_library_path.unwrap_or_default(),
-            })
-        }
-        AppType::Codex => {
-            let auth_path = codex_config::get_codex_auth_path();
-            let config_text = codex_config::read_codex_config_text().unwrap_or_default();
-            let exists = auth_path.exists() || !config_text.trim().is_empty();
-            let path = codex_config::get_codex_config_dir()
-                .to_string_lossy()
-                .to_string();
-
-            Ok(ConfigStatus { exists, path })
-        }
-        AppType::Gemini => {
-            let env_path = crate::gemini_config::get_gemini_env_path();
-            let exists = env_path.exists();
-            let path = crate::gemini_config::get_gemini_dir()
-                .to_string_lossy()
-                .to_string();
-
-            Ok(ConfigStatus { exists, path })
-        }
-        AppType::GrokBuild => {
-            let config_path = crate::grok_config::get_grok_config_path();
-            let exists = config_path.exists();
-            let path = crate::grok_config::get_grok_config_dir()
-                .to_string_lossy()
-                .to_string();
-
-            Ok(ConfigStatus { exists, path })
-        }
-        AppType::OpenCode => {
-            let config_path =
-                crate::opencode_config::get_opencode_config_path().map_err(|e| e.to_string())?;
-            let exists = config_path.try_exists().map_err(|e| e.to_string())?;
-            let path = crate::opencode_config::get_opencode_dir()
-                .to_string_lossy()
-                .to_string();
-
-            Ok(ConfigStatus { exists, path })
-        }
-        AppType::OpenClaw => {
-            let config_path = crate::openclaw_config::get_openclaw_config_path();
-            let exists = config_path.exists();
-            let path = crate::openclaw_config::get_openclaw_dir()
-                .to_string_lossy()
-                .to_string();
-
-            Ok(ConfigStatus { exists, path })
-        }
-        AppType::Hermes => {
-            let config_path = crate::hermes_config::get_hermes_config_path();
-            let exists = config_path.exists();
-            let path = crate::hermes_config::get_hermes_dir()
-                .to_string_lossy()
-                .to_string();
-
-            Ok(ConfigStatus { exists, path })
-        }
-        AppType::Dsh => {
-            let file = crate::dsh_config::config_path();
-            Ok(ConfigStatus {
-                exists: file.exists(),
-                path: file.to_string_lossy().to_string(),
-            })
-        }
-        AppType::Kimi => {
-            let file = crate::kimi_config::config_path();
-            Ok(ConfigStatus {
-                exists: file.exists(),
-                path: file.to_string_lossy().to_string(),
-            })
-        }
-        AppType::Mcode => {
-            let file = crate::mcode_config::config_path();
-            Ok(ConfigStatus {
-                exists: file.exists(),
-                path: file.parent().unwrap().to_string_lossy().into_owned(),
-            })
-        }
-        AppType::Pi => {
-            let config_path = crate::pi_config::get_pi_models_path().map_err(|e| e.to_string())?;
-            let path = crate::pi_config::get_pi_agent_dir()
-                .map_err(|e| e.to_string())?
-                .to_string_lossy()
-                .to_string();
-            Ok(ConfigStatus {
-                exists: config_path.exists(),
-                path,
-            })
-        }
-        AppType::Agy => {
-            let dir = crate::agy_config::agy_dir();
-            Ok(ConfigStatus {
-                exists: crate::agy_config::settings_path().exists(),
-                path: dir.to_string_lossy().into_owned(),
-            })
-        }
-        AppType::Omp => {
-            let config_path =
-                crate::omp_config::get_omp_models_path().map_err(|e| e.to_string())?;
-            let path = crate::omp_config::get_omp_agent_dir()
-                .map_err(|e| e.to_string())?
-                .to_string_lossy()
-                .to_string();
-            Ok(ConfigStatus {
-                exists: config_path.exists(),
-                path,
-            })
-        }
     }
 }
 
@@ -201,24 +62,6 @@ pub async fn get_claude_code_config_path() -> Result<String, String> {
 pub async fn get_config_dir(app: String) -> Result<String, String> {
     let dir = match AppType::from_str(&app).map_err(|e| e.to_string())? {
         AppType::Claude => config::get_claude_config_dir(),
-        AppType::ClaudeDesktop => {
-            crate::claude_desktop_config::get_config_library_path().map_err(|e| e.to_string())?
-        }
-        AppType::Codex => codex_config::get_codex_config_dir(),
-        AppType::Gemini => crate::gemini_config::get_gemini_dir(),
-        AppType::GrokBuild => crate::grok_config::get_grok_config_dir(),
-        AppType::OpenCode => crate::opencode_config::get_opencode_dir(),
-        AppType::OpenClaw => crate::openclaw_config::get_openclaw_dir(),
-        AppType::Hermes => crate::hermes_config::get_hermes_dir(),
-        AppType::Pi => crate::pi_config::get_pi_agent_dir().map_err(|e| e.to_string())?,
-        AppType::Dsh => crate::dsh_config::data_dir(),
-        AppType::Kimi => crate::kimi_config::data_dir(),
-        AppType::Omp => crate::omp_config::get_omp_agent_dir().map_err(|e| e.to_string())?,
-        AppType::Mcode => crate::mcode_config::config_path()
-            .parent()
-            .unwrap()
-            .to_path_buf(),
-        AppType::Agy => crate::agy_config::agy_dir(),
     };
 
     Ok(dir.to_string_lossy().to_string())
@@ -228,24 +71,6 @@ pub async fn get_config_dir(app: String) -> Result<String, String> {
 pub async fn open_config_folder(handle: AppHandle, app: String) -> Result<bool, String> {
     let config_dir = match AppType::from_str(&app).map_err(|e| e.to_string())? {
         AppType::Claude => config::get_claude_config_dir(),
-        AppType::ClaudeDesktop => {
-            crate::claude_desktop_config::get_config_library_path().map_err(|e| e.to_string())?
-        }
-        AppType::Codex => codex_config::get_codex_config_dir(),
-        AppType::Gemini => crate::gemini_config::get_gemini_dir(),
-        AppType::GrokBuild => crate::grok_config::get_grok_config_dir(),
-        AppType::OpenCode => crate::opencode_config::get_opencode_dir(),
-        AppType::OpenClaw => crate::openclaw_config::get_openclaw_dir(),
-        AppType::Hermes => crate::hermes_config::get_hermes_dir(),
-        AppType::Pi => crate::pi_config::get_pi_agent_dir().map_err(|e| e.to_string())?,
-        AppType::Dsh => crate::dsh_config::data_dir(),
-        AppType::Kimi => crate::kimi_config::data_dir(),
-        AppType::Omp => crate::omp_config::get_omp_agent_dir().map_err(|e| e.to_string())?,
-        AppType::Mcode => crate::mcode_config::config_path()
-            .parent()
-            .unwrap()
-            .to_path_buf(),
-        AppType::Agy => crate::agy_config::agy_dir(),
     };
 
     if !config_dir.exists() {
@@ -388,8 +213,6 @@ pub async fn set_common_config_snippet(
 
     let value = if is_cleared { None } else { Some(snippet) };
 
-    // Claude Code、Codex、Gemini CLI 的片段已冻结：只存库，留给旧版、Lite、CLI 读；新版
-    // 既不按它迁移存量行，也不再用它重写 live（共享设置直接在供应商编辑器底部改）。
     state
         .db
         .set_config_snippet(&app_type, value)
@@ -399,53 +222,6 @@ pub async fn set_common_config_snippet(
         .set_config_snippet_cleared(&app_type, is_cleared)
         .map_err(|e| e.to_string())?;
 
-    if app_type == "omo"
-        && state
-            .db
-            .get_current_omo_provider("opencode", "omo")
-            .map_err(|e| e.to_string())?
-            .is_some()
-    {
-        crate::services::OmoService::write_config_to_file(
-            state.inner(),
-            &crate::services::omo::STANDARD,
-        )
-        .map_err(|e| e.to_string())?;
-    }
-    if app_type == "omo-slim"
-        && state
-            .db
-            .get_current_omo_provider("opencode", "omo-slim")
-            .map_err(|e| e.to_string())?
-            .is_some()
-    {
-        crate::services::OmoService::write_config_to_file(
-            state.inner(),
-            &crate::services::omo::SLIM,
-        )
-        .map_err(|e| e.to_string())?;
-    }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::validate_common_config_snippet;
-
-    #[test]
-    fn validate_common_config_snippet_accepts_comment_only_codex_snippet() {
-        validate_common_config_snippet("codex", "# comment only\n")
-            .expect("comment-only codex snippet should be valid");
-    }
-
-    #[test]
-    fn validate_common_config_snippet_rejects_invalid_codex_snippet() {
-        let err = validate_common_config_snippet("codex", "[broken")
-            .expect_err("invalid codex snippet should be rejected");
-        assert!(
-            err.contains("TOML") || err.contains("toml") || err.contains("格式"),
-            "expected TOML validation error, got {err}"
-        );
-    }
 }
 

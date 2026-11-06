@@ -10,7 +10,6 @@ use std::time::SystemTime;
 
 use serde::Serialize;
 
-use crate::codex_history_migration;
 use crate::config::{get_app_config_dir, get_home_dir};
 use crate::database::Database;
 use crate::error::AppError;
@@ -75,20 +74,6 @@ fn categories() -> Vec<Category> {
             deletable: false,
         },
         whole("skills", app_dir.join("skill-backups")),
-        whole(
-            "codexHistoryUnify",
-            app_backups.join(codex_history_migration::OFFICIAL_UNIFY_MIGRATION_NAME),
-        ),
-        whole(
-            "codexHistoryUnifyRestore",
-            app_backups.join(codex_history_migration::OFFICIAL_UNIFY_RESTORE_BACKUP_NAME),
-        ),
-        whole(
-            "codexHistoryProviderMigration",
-            app_backups.join(codex_history_migration::MIGRATION_NAME),
-        ),
-        whole("hermes", app_backups.join("hermes")),
-        whole("openclaw", app_backups.join("openclaw")),
         whole("proxyLiveBackup", device_backups.join("proxy-live-backup")),
         files("envVars", env_backups, |name| {
             name.starts_with("env-backup-") && name.ends_with(".json")
@@ -240,12 +225,6 @@ pub fn delete_location(id: &str) -> Result<u64, AppError> {
             "备份类别 {id} 不支持整体删除"
         )));
     }
-    // 与写这些目录的操作串行：Codex 迁移 / 还原正在写备份时不能抽掉目录；
-    // Skill 卸载、恢复同样持有 Skills 状态锁。
-    let _codex_guard = id
-        .starts_with("codex")
-        .then(codex_history_migration::lock_history_op_for_backup_cleanup);
-
     let freed = measure(&category).size;
     match category.scope {
         Scope::WholeDir => {

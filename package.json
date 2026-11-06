@@ -1,7 +1,7 @@
 {
   "name": "ca-switch",
   "version": "4.0.25",
-  "description": "Switch between providers for Claude Code",
+  "description": "Local protocol gateway for Anthropic, OpenAI Chat, OpenAI Responses and Gemini APIs",
   "type": "module",
   "scripts": {
     "dev": "pnpm tauri dev",

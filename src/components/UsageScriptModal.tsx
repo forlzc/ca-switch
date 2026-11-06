@@ -5,17 +5,9 @@ import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { Provider, UsageScript, UsageData, createUsageScript } from "@/types";
 import { usageApi, settingsApi, type AppId } from "@/lib/api";
-import { copilotGetUsage, copilotGetUsageForAccount } from "@/lib/api/copilot";
 import { useSettingsQuery } from "@/lib/query";
-import { resolveManagedAccountId } from "@/lib/authBinding";
-import { resolveCodexOfficialIdentity } from "@/utils/providerCapabilities";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { useDarkMode } from "@/hooks/useDarkMode";
-import {
-  extractCodexBaseUrl,
-  extractCodexExperimentalBearerToken,
-} from "@/utils/providerConfigUtils";
-import { parseGrokBuildConfig } from "@/utils/grokBuildConfig";
 import JsonEditor from "./JsonEditor";
 import * as prettier from "prettier/standalone";
 import * as parserBabel from "prettier/parser-babel";
@@ -27,11 +19,7 @@ import { Switch } from "@/components/ui/switch";
 import { FullScreenPanel } from "@/components/common/FullScreenPanel";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { cn } from "@/lib/utils";
-import {
-  TEMPLATE_TYPES,
-  PROVIDER_TYPES,
-  type TemplateType,
-} from "@/config/constants";
+import { TEMPLATE_TYPES, type TemplateType } from "@/config/constants";
 import {
   CODING_PLAN_PROVIDERS,
   detectCodingPlanProvider,
@@ -154,17 +142,11 @@ const generatePresetTemplates = (
   },
 })`,
 
-  // GitHub Copilot 模板不需要脚本，使用专用 API
-  [TEMPLATE_TYPES.GITHUB_COPILOT]: "",
-
   // Coding Plan 模板不需要脚本，使用专用 Rust 查询
   [TEMPLATE_TYPES.TOKEN_PLAN]: "",
 
   // 官方余额查询模板不需要脚本，使用专用 Rust 查询
   [TEMPLATE_TYPES.BALANCE]: "",
-
-  // 官方订阅额度查询不需要脚本，使用 CLI/OAuth 凭据调用官方 API
-  [TEMPLATE_TYPES.OFFICIAL_SUBSCRIPTION]: "",
 });
 
 // 模板名称国际化键映射
@@ -173,11 +155,8 @@ const TEMPLATE_NAME_KEYS: Record<string, string> = {
   [TEMPLATE_TYPES.GENERAL]: "usageScript.templateGeneral",
   [TEMPLATE_TYPES.NEW_API]: "usageScript.templateNewAPI",
   [TEMPLATE_TYPES.SUB2API]: "usageScript.templateSub2API",
-  [TEMPLATE_TYPES.GITHUB_COPILOT]: "usageScript.templateCopilot",
   [TEMPLATE_TYPES.TOKEN_PLAN]: "usageScript.templateTokenPlan",
   [TEMPLATE_TYPES.BALANCE]: "usageScript.templateBalance",
-  [TEMPLATE_TYPES.OFFICIAL_SUBSCRIPTION]:
-    "usageScript.templateOfficialSubscription",
 };
 
 /** 官方余额查询供应商检测 */
@@ -199,50 +178,9 @@ function detectBalanceProvider(baseUrl: string | undefined): boolean {
   return BALANCE_PROVIDERS.some((bp) => bp.pattern.test(baseUrl));
 }
 
-function isOfficialSubscriptionProvider(provider: Provider, appId: AppId) {
-  if (!["claude", "codex", "gemini", "grokbuild", "agy"].includes(appId))
-    return false;
-  if (provider.category === "official") return true;
-
-  const config = provider.settingsConfig as Record<string, any>;
-  if (appId === "claude") {
-    const baseUrl = config?.env?.ANTHROPIC_BASE_URL;
-    return !baseUrl || (typeof baseUrl === "string" && baseUrl.trim() === "");
-  }
-  if (appId === "codex") {
-    const apiKey = config?.auth?.OPENAI_API_KEY;
-    const bearerToken =
-      typeof config?.config === "string"
-        ? extractCodexExperimentalBearerToken(config.config)
-        : undefined;
-    return (
-      !bearerToken &&
-      (!apiKey || (typeof apiKey === "string" && apiKey.trim() === ""))
-    );
-  }
-  if (appId === "gemini" || appId === "agy") {
-    const env = config?.env || {};
-    const apiKey = env.GEMINI_API_KEY;
-    const baseUrl = env.GOOGLE_GEMINI_BASE_URL;
-    return (
-      (!apiKey || (typeof apiKey === "string" && apiKey.trim() === "")) &&
-      (!baseUrl || (typeof baseUrl === "string" && baseUrl.trim() === ""))
-    );
-  }
-  // grokbuild 不做配置启发式，只认上方的 category === "official"：官方态判定
-  // 在后端是 TOML 解析（grok_config::is_official_live_config），正则无法忠实
-  // 镜像（引号键/inline table/非法 TOML 均会误判为官方），误判会让本组件的
-  // state 初始化丢弃已保存的非官方脚本。claude/codex/gemini 的启发式建立在
-  // 已解析的 JSON 字段上是精确的，不受此限。官方判定以 category 为 SSOT 的
-  // 理由见 ProviderCard 中的注释。
-  return false;
-}
-
 const NATIVE_USAGE_TEMPLATES = new Set<string>([
-  TEMPLATE_TYPES.GITHUB_COPILOT,
   TEMPLATE_TYPES.TOKEN_PLAN,
   TEMPLATE_TYPES.BALANCE,
-  TEMPLATE_TYPES.OFFICIAL_SUBSCRIPTION,
 ]);
 
 const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
@@ -276,91 +214,18 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
         const config = provider.settingsConfig;
         if (!config) return { apiKey: undefined, baseUrl: undefined };
 
-        // 处理不同应用的配置格式
-        if (appId === "claude" || appId === "claude-desktop") {
-          // Claude / Claude Desktop: { env: { ANTHROPIC_AUTH_TOKEN | ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL } }
-          // Key fallbacks mirror the backend resolver (Provider::resolve_usage_credentials).
-          const env = (config as any).env || {};
-          return {
-            apiKey:
-              env.ANTHROPIC_AUTH_TOKEN ||
-              env.ANTHROPIC_API_KEY ||
-              env.OPENROUTER_API_KEY ||
-              env.GOOGLE_API_KEY,
-            baseUrl: env.ANTHROPIC_BASE_URL,
-          };
-        } else if (appId === "codex") {
-          // Codex: { auth: { OPENAI_API_KEY }, config: TOML string with base_url }
-          const auth = (config as any).auth || {};
-          const configToml = (config as any).config || "";
-          const apiKey =
-            typeof auth.OPENAI_API_KEY === "string" &&
-            auth.OPENAI_API_KEY.trim()
-              ? auth.OPENAI_API_KEY
-              : extractCodexExperimentalBearerToken(configToml);
-          return {
-            apiKey,
-            baseUrl: extractCodexBaseUrl(configToml),
-          };
-        } else if (appId === "gemini" || appId === "agy") {
-          // Gemini: { env: { GEMINI_API_KEY, GOOGLE_GEMINI_BASE_URL } }
-          // Key fallback mirrors the backend resolver (Provider::resolve_usage_credentials).
-          const env = (config as any).env || {};
-          return {
-            apiKey: env.GEMINI_API_KEY || env.GOOGLE_API_KEY,
-            baseUrl: env.GOOGLE_GEMINI_BASE_URL,
-          };
-        } else if (appId === "grokbuild") {
-          const grokConfig = parseGrokBuildConfig(
-            (config as any).config,
-            provider.name,
-          );
-          return {
-            apiKey: grokConfig.apiKey,
-            baseUrl: grokConfig.baseUrl,
-          };
-        } else if (appId === "hermes") {
-          // Hermes: settingsConfig 顶层扁平（snake_case，对应 config.yaml）
-          return {
-            apiKey: (config as any).api_key,
-            baseUrl: (config as any).base_url,
-          };
-        } else if (appId === "kimi") {
-          // Kimi Code: 凭据在 provider.{base_url, api_key}（snake_case，对应 config.toml）
-          const kimiProvider = (config as any).provider || {};
-          return {
-            apiKey: kimiProvider.api_key,
-            baseUrl: kimiProvider.base_url,
-          };
-        } else if (appId === "pi" || appId === "omp") {
-          // Pi / Oh My Pi: provider values are camelCase; a model may override baseUrl.
-          const root = config as any;
-          const firstModel = Array.isArray(root.models)
-            ? root.models[0]
-            : undefined;
-          return {
-            apiKey: root.apiKey,
-            baseUrl: firstModel?.baseUrl || root.baseUrl,
-          };
-        } else if (appId === "openclaw") {
-          // OpenClaw: settingsConfig 顶层扁平（camelCase，对应 openclaw.json）
-          return {
-            apiKey: (config as any).apiKey,
-            baseUrl: (config as any).baseUrl,
-          };
-        } else if (
-          appId === "opencode" ||
-          appId === "dsh" ||
-          appId === "mcode"
-        ) {
-          // OpenCode / DeepSeek Harness / MiniMax Code: 凭据嵌在 options.{baseURL, apiKey}。
-          const options = (config as any).options || {};
-          return {
-            apiKey: options.apiKey,
-            baseUrl: options.baseURL,
-          };
-        }
-        return { apiKey: undefined, baseUrl: undefined };
+        // 供应商配置统一为 Anthropic 协议形态：
+        // { env: { ANTHROPIC_AUTH_TOKEN | ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL } }
+        // Key fallbacks mirror the backend resolver (Provider::resolve_usage_credentials).
+        const env = (config as any).env || {};
+        return {
+          apiKey:
+            env.ANTHROPIC_AUTH_TOKEN ||
+            env.ANTHROPIC_API_KEY ||
+            env.OPENROUTER_API_KEY ||
+            env.GOOGLE_API_KEY,
+          baseUrl: env.ANTHROPIC_BASE_URL,
+        };
       } catch (error) {
         console.error("Failed to extract provider credentials:", error);
         return { apiKey: undefined, baseUrl: undefined };
@@ -373,34 +238,11 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
   };
 
   const providerCredentials = getProviderCredentials();
-  const isBoundCodexOfficial =
-    resolveCodexOfficialIdentity(appId, provider) === "managed_account";
-  const isOfficialSubscription = isOfficialSubscriptionProvider(
-    provider,
-    appId,
-  );
-  // 绑了授权中心账号的 Claude 官方卡：额度按这个号查（同 ProviderCard 的 claudeBoundAccountId）
-  const claudeBoundAccountId =
-    appId === "claude" && isOfficialSubscription
-      ? resolveManagedAccountId(provider.meta, "claude_official")?.trim() ||
-        null
-      : null;
-  // 绑了账号的官方卡没保存过开关时默认开（卡片和托盘同一规则）
-  const defaultsToEnabled =
-    isBoundCodexOfficial || Boolean(claudeBoundAccountId);
 
   const [script, setScript] = useState<UsageScript>(() => {
     const savedScript = provider.meta?.usage_script;
     if (savedScript) {
       const normalizedScript = createUsageScript(savedScript);
-      if (
-        isOfficialSubscription &&
-        normalizedScript.templateType !== TEMPLATE_TYPES.OFFICIAL_SUBSCRIPTION
-      ) {
-        return createUsageScript({
-          enabled: defaultsToEnabled ? normalizedScript.enabled : false,
-        });
-      }
       // 已有配置：如果是 coding_plan 但没有 codingPlanProvider，自动检测填充
       if (
         normalizedScript.templateType === TEMPLATE_TYPES.TOKEN_PLAN &&
@@ -422,10 +264,6 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
 
     if (detectBalanceProvider(providerCredentials.baseUrl)) {
       return createUsageScript();
-    }
-
-    if (isOfficialSubscription) {
-      return createUsageScript({ enabled: defaultsToEnabled });
     }
 
     return createUsageScript({
@@ -493,21 +331,9 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(
     () => {
       const existingScript = provider.meta?.usage_script;
-      // Copilot 供应商默认使用 Copilot 模板
-      if (provider.meta?.providerType === PROVIDER_TYPES.GITHUB_COPILOT) {
-        return TEMPLATE_TYPES.GITHUB_COPILOT;
-      }
       // 优先使用保存的 templateType
-      if (
-        existingScript?.templateType &&
-        (!isOfficialSubscription ||
-          existingScript.templateType === TEMPLATE_TYPES.OFFICIAL_SUBSCRIPTION)
-      ) {
+      if (existingScript?.templateType) {
         return existingScript.templateType as string;
-      }
-      // 官方 CLI/OAuth 供应商默认使用官方订阅额度模板；开关默认关，绑了账号的默认开
-      if (isOfficialSubscription) {
-        return TEMPLATE_TYPES.OFFICIAL_SUBSCRIPTION;
       }
       // 向后兼容：根据字段推断模板类型
       // 检测 NEW_API 模板（有 accessToken 或 userId）
@@ -580,45 +406,6 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
   const handleTest = async () => {
     setTesting(true);
     try {
-      // 官方订阅额度模板使用 CLI/OAuth 凭据和官方 API
-      if (selectedTemplate === TEMPLATE_TYPES.OFFICIAL_SUBSCRIPTION) {
-        const { subscriptionApi } = await import("@/lib/api/subscription");
-        const accountId = isBoundCodexOfficial
-          ? (resolveManagedAccountId(
-              provider.meta,
-              PROVIDER_TYPES.CODEX_OAUTH,
-            ) ?? null)
-          : null;
-        const quota = isBoundCodexOfficial
-          ? await subscriptionApi.getCodexOauthQuota(accountId)
-          : claudeBoundAccountId
-            ? await subscriptionApi.getClaudeAccountQuota(claudeBoundAccountId)
-            : await subscriptionApi.getQuota(appId);
-        if (quota.success && quota.tiers.length > 0) {
-          const summary = quota.tiers
-            .map((tier) => `${tier.name}: ${Math.round(tier.utilization)}%`)
-            .join(",");
-          toast.success(`${t("usageScript.testSuccess")}${summary}`, {
-            duration: 3000,
-            closeButton: true,
-          });
-          queryClient.setQueryData(
-            isBoundCodexOfficial
-              ? ["codex_oauth", "quota", accountId ?? "default"]
-              : claudeBoundAccountId
-                ? ["claude_official", "quota", claudeBoundAccountId]
-                : ["subscription", "quota", appId],
-            quota,
-          );
-        } else {
-          toast.error(
-            `${t("usageScript.testFailed")}: ${quota.error || t("endpointTest.noResult")}`,
-            { duration: 5000 },
-          );
-        }
-        return;
-      }
-
       // 官方余额查询模板使用专用 API
       if (selectedTemplate === TEMPLATE_TYPES.BALANCE) {
         const baseUrl = providerCredentials.baseUrl ?? "";
@@ -698,38 +485,6 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
             { duration: 5000 },
           );
         }
-        return;
-      }
-
-      // Copilot 模板使用专用 API
-      if (selectedTemplate === TEMPLATE_TYPES.GITHUB_COPILOT) {
-        const accountId = resolveManagedAccountId(
-          provider.meta,
-          PROVIDER_TYPES.GITHUB_COPILOT,
-        );
-        const usage = accountId
-          ? await copilotGetUsageForAccount(accountId)
-          : await copilotGetUsage();
-        const premium = usage.quota_snapshots.premium_interactions;
-        const used = premium.entitlement - premium.remaining;
-        const summary = `[${usage.copilot_plan}] ${t("usage.remaining")} ${premium.remaining}/${premium.entitlement} (${t("usageScript.resetDate")}: ${usage.quota_reset_date})`;
-        toast.success(`${t("usageScript.testSuccess")}${summary}`, {
-          duration: 3000,
-          closeButton: true,
-        });
-        // 更新缓存
-        queryClient.setQueryData(["usage", provider.id, appId], {
-          success: true,
-          data: [
-            {
-              planName: usage.copilot_plan,
-              remaining: premium.remaining,
-              total: premium.entitlement,
-              used: used,
-              unit: t("usageScript.premiumRequests"),
-            },
-          ],
-        });
         return;
       }
 
@@ -975,44 +730,26 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
               {t("usageScript.presetTemplate")}
             </Label>
             <div className="flex gap-2 flex-wrap">
-              {Object.keys(PRESET_TEMPLATES)
-                .filter((name) => {
-                  const isCopilotProvider =
-                    provider.meta?.providerType === "github_copilot";
-                  // Copilot 供应商只显示 copilot 模板
-                  if (isCopilotProvider) {
-                    return name === TEMPLATE_TYPES.GITHUB_COPILOT;
-                  }
-                  // 官方 CLI/OAuth 供应商只显示官方订阅额度模板
-                  if (isOfficialSubscription) {
-                    return name === TEMPLATE_TYPES.OFFICIAL_SUBSCRIPTION;
-                  }
-                  // 非 Copilot 供应商不显示 copilot 模板
-                  return (
-                    name !== TEMPLATE_TYPES.GITHUB_COPILOT &&
-                    name !== TEMPLATE_TYPES.OFFICIAL_SUBSCRIPTION
-                  );
-                })
-                .map((name) => {
-                  const isSelected = selectedTemplate === name;
-                  return (
-                    <Button
-                      key={name}
-                      type="button"
-                      variant={isSelected ? "default" : "outline"}
-                      size="sm"
-                      className={cn(
-                        "rounded-lg border",
-                        isSelected
-                          ? "shadow-sm"
-                          : "bg-surface text-fg-2 hover:bg-subtle hover:text-accent-foreground",
-                      )}
-                      onClick={() => handleUsePreset(name)}
-                    >
-                      {t(TEMPLATE_NAME_KEYS[name])}
-                    </Button>
-                  );
-                })}
+              {Object.keys(PRESET_TEMPLATES).map((name) => {
+                const isSelected = selectedTemplate === name;
+                return (
+                  <Button
+                    key={name}
+                    type="button"
+                    variant={isSelected ? "default" : "outline"}
+                    size="sm"
+                    className={cn(
+                      "rounded-lg border",
+                      isSelected
+                        ? "shadow-sm"
+                        : "bg-surface text-fg-2 hover:bg-subtle hover:text-accent-foreground",
+                    )}
+                    onClick={() => handleUsePreset(name)}
+                  >
+                    {t(TEMPLATE_NAME_KEYS[name])}
+                  </Button>
+                );
+              })}
             </div>
 
             {/* 自定义模式：变量提示和具体值 */}
@@ -1081,15 +818,6 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
               </div>
             )}
 
-            {/* Copilot 模式：自动认证提示 */}
-            {selectedTemplate === TEMPLATE_TYPES.GITHUB_COPILOT && (
-              <div className="space-y-2 border-t border-white/10 pt-3">
-                <p className="text-sm text-fg-2">
-                  {t("usageScript.copilotAutoAuth")}
-                </p>
-              </div>
-            )}
-
             {/* 官方余额查询模式：自动提示 */}
             {selectedTemplate === TEMPLATE_TYPES.BALANCE && (
               <div className="space-y-3 border-t border-white/10 pt-3">
@@ -1108,17 +836,6 @@ const UsageScriptModal: React.FC<UsageScriptModalProps> = ({
                     </span>
                   ))}
                 </div>
-              </div>
-            )}
-
-            {/* 官方订阅额度模式：自动提示 */}
-            {selectedTemplate === TEMPLATE_TYPES.OFFICIAL_SUBSCRIPTION && (
-              <div className="space-y-2 border-t border-white/10 pt-3">
-                <p className="text-sm text-fg-2">
-                  {appId === "agy"
-                    ? t("usageScript.officialSubscriptionHintAgy")
-                    : t("usageScript.officialSubscriptionHint")}
-                </p>
               </div>
             )}
 

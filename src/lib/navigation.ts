@@ -12,7 +12,6 @@ export type View = AppPage | GlobalPage | "settings";
 
 export type SettingsSection =
   | "general"
-  | "appConfig"
   | "routing"
   | "network"
   | "data"
@@ -20,7 +19,6 @@ export type SettingsSection =
 
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   "general",
-  "appConfig",
   "routing",
   "network",
   "data",
@@ -99,7 +97,6 @@ export function normalizeSettingsSection(
     case "advanced":
     case "data":
       return "data";
-    case "appConfig":
     case "network":
     case "about":
     case "general":

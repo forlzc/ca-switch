@@ -29,6 +29,18 @@ enum CodingPlanProvider {
     CommandCode,
 }
 
+/// 判断 base_url 的 host 是否命中给定域名（含子域名）。
+fn url_host_matches_any(base_url: &str, hosts: &[&str]) -> bool {
+    let Ok(url) = url::Url::parse(base_url) else {
+        return false;
+    };
+    url.host_str().is_some_and(|host| {
+        hosts
+            .iter()
+            .any(|candidate| host == *candidate || host.ends_with(&format!(".{candidate}")))
+    })
+}
+
 fn detect_provider(base_url: &str) -> Option<CodingPlanProvider> {
     let url = base_url.to_lowercase();
     if url.contains("api.kimi.com/coding") {
@@ -37,12 +49,9 @@ fn detect_provider(base_url: &str) -> Option<CodingPlanProvider> {
         Some(CodingPlanProvider::ZhipuCn)
     } else if url.contains("api.z.ai") {
         Some(CodingPlanProvider::ZhipuEn)
-    } else if crate::codex_config::codex_url_host_matches_any(
-        base_url,
-        &["api.minimaxi.com", "api.minimax.cn"],
-    ) {
+    } else if url_host_matches_any(base_url, &["api.minimaxi.com", "api.minimax.cn"]) {
         Some(CodingPlanProvider::MiniMaxCn)
-    } else if crate::codex_config::codex_url_host_matches_any(base_url, &["api.minimax.io"]) {
+    } else if url_host_matches_any(base_url, &["api.minimax.io"]) {
         Some(CodingPlanProvider::MiniMaxEn)
     } else if url.contains("zenmux") {
         Some(CodingPlanProvider::ZenMux)

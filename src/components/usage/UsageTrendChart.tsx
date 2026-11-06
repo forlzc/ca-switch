@@ -30,7 +30,6 @@ interface UsageTrendChartProps {
   range: UsageRangeSelection;
   /** 画哪个指标：由上方指标条选 */
   metric: UsageMetric;
-  appType?: string;
   providerName?: string;
   model?: string;
   refreshIntervalMs: number;
@@ -280,7 +279,6 @@ function useContainerWidth() {
 export function UsageTrendChart({
   range,
   metric,
-  appType,
   providerName,
   model,
   refreshIntervalMs,
@@ -293,7 +291,7 @@ export function UsageTrendChart({
   const { startDate, endDate } = resolveUsageRange(range);
   const { data: trends, isLoading } = useUsageTrends(
     range,
-    { appType, providerName, model },
+    { providerName, model },
     {
       refetchInterval: refreshIntervalMs > 0 ? refreshIntervalMs : false,
     },

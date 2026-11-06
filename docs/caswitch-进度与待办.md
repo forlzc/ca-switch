@@ -263,3 +263,75 @@ cd .. && pnpm build          # 2f 时
 - `caswitch-精简重构规划.md` — 总规划、P0–P5 分解、协议矩阵、前端清单、数据迁移
 - `caswitch-P0-基线.md`、`caswitch-P1-完成报告.md`
 - `caswitch-P2-迁移方案.md`（v1）、`caswitch-P2-迁移方案-v2.md`（§9 状态表、§10 2b-2 落地备注）
+
+---
+
+## 10. 通用代理去客户端化（2026-11-05 追加）
+
+### 10.1 用量统计只保留代理流量
+
+- 删除会话日志用量后端链路：`services/session_usage*`、各 agent 的 `session_usage_*`、
+  `session_manager/**`、`kimi_session.rs`；`commands/usage.rs` 去掉同步 / 重建 / 数据源命令；
+  `lib.rs` 去掉后台定时同步与相关命令注册；`settings.rs` 去掉 `session_auto_sync_enabled`。
+- 前端：`useUsageAutoRefresh` 只保留滚动范围的每分钟重查；用量页去掉同步按钮、会话扫描开关、
+  Codex 重建与「上次同步」；`UsageSettingsSheet` 只剩路由日志入口、显示与定价；
+  去掉应用筛选 chips、请求日志的应用图标列、估算速度/首字（会话日志专属口径）。
+- schema **v27**：删除 `proxy_request_logs` 中非 `data_source='proxy'` 的历史行，
+  DROP `session_log_sync` / `session_usage_dedup`；新库不再创建这两张表。
+- `usage_stats.rs` 的供应商名回退改为 `COALESCE(name, provider_id)`，去掉各 agent 的会话占位名。
+
+### 10.2 全软件去客户端名称
+
+- 导航只保留一个入口，名称改为「供应商」；`AppGlyph` 改为通用服务器图标，不再渲染各客户端品牌图标。
+- `APP_DISPLAY_NAME` 改为协议名：Anthropic / OpenAI Chat / OpenAI Responses / Gemini；
+  供应商卡片、页头、定价面板、托盘统一走这套名称。
+- 设置页下线「应用配置」分组（各客户端目录 / Claude 插件 / Codex 认证），文件删除；
+  App 页「配置目录」菜单项移除。
+- 5 个语言包把文案中的 Claude / Codex / Gemini CLI / Grok / Kimi / OpenCode / OpenClaw /
+  Hermes / Antigravity / MiniMax / Pi / DSH 统一替换为 Anthropic / OpenAI / Gemini 协议名；
+  `app.description` 改为「通用 API 代理与用量统计工具」。
+
+### 10.3 验证
+
+- `cargo check --all-targets`：0 error。
+- `pnpm typecheck`：通过。
+- 用量相关前端测试（RequestLogTable / ProviderStatsTable / UsageDashboard / UsagePage /
+  useUsageAutoRefresh / usageFormat）：全部通过。
+
+### 10.4 后续（结构性收敛，未完成）
+
+- `src-tauri` 仍有 13 个 `*_config.rs` 与 14 个 `AppType` 变体被 provider / deeplink /
+  prompt 路径引用；彻底删除需要按协议重写 provider 表单的保存契约与 deeplink 导入。
+
+### 10.5 前端去 agent 品牌（2026-11-06）
+
+用户口径：软件是通用代理，**整个软件**都不出现具体 agent，不只是用量统计。
+
+已完成：
+
+- **供应商页**：`ProviderCard` 重写为通用卡（图标 / 名称 / 地址 / 健康 / 用量脚本），
+  删除 Copilot / Codex OAuth / xAI / Agy / Kimi / Claude 账号额度、官方订阅额度、终端入口；
+  `ProviderList` 只保留切换态列表，删除 opencode / openclaw / hermes / pi / dsh / omo 分支、
+  DSH 卡片与终端回调；空状态不再提供「导入当前配置」（通用代理无客户端配置可导入）。
+- **供应商表单**：`ClaudeFormFields` 删除全部 OAuth 区块与预设模板参数；`ProviderForm` 收敛为
+  单一 Anthropic 协议表单（名称 / 地址 / Key / 模型 / 协议格式 / 请求覆盖 / JSON），
+  删除其余 10 余个 appId 分支；`CustomUserAgentField` 去掉客户端 UA 预设，只留自由输入。
+- **删除的组件/配置**：Kimi/Mcode/Pi/OpenClaw/Hermes/OpenCode/Omo/ClaudeDesktop/GrokBuild/
+  Codex/Gemini 表单、Codex/Gemini 配置编辑器、OAuth 区块与账号管理面板、各 agent 额度页脚、
+  `ProviderPresetSelector`/`presetGroups`/`presetStep`、通用供应商面板、settings/auth 账号组；
+  对应单测与死 hook（useManagedAuth / useCodexOauth / useXaiOauth / useKimiOAuth / useCopilotAuth 等）一并删除。
+- **其它可达 UI**：设置页去掉「首选终端」；`UsageScriptModal` 去掉 Copilot 与官方订阅模板；
+  `routingReason` 只按协议给原因；README / package.json / 托盘入口名改为协议名；
+  i18n 中 `CC Switch` → `CA Switch`，删除 14 个无引用的顶层命名空间（含 authCenter / prompts /
+  claudeDesktop / mcode / copilot 等）。
+- **项目（Profile）文案**：`profiles.switcherTooltip.*` 与 `profiles.createDescription.*`
+  从「供应商 / MCP / Skills / 记忆文件」改为「供应商配置」，5 个语言包同步。
+- **验证**：`pnpm typecheck` 通过；`pnpm vitest run tests/components tests/integration`
+  67 文件 / 443 用例通过；`pnpm build:renderer` 通过。
+
+仍然存在（后续）：
+
+- `src/config/*ProviderPresets.ts` 仍保留内置预设数据（不再被任何 UI 渲染）；下一步可整体删除，
+  并把 `AppId` 收敛为单一 `"claude"` 入口。
+- 后端 `AppType` / `*_config.rs` / deeplink / 托盘其它文案仍含 agent 名，见 10.4。
+

@@ -64,16 +64,7 @@ pub(super) fn candidates(
 }
 
 fn grok_updater_uses_npm() -> bool {
-    std::fs::read_to_string(crate::grok_config::get_grok_config_path())
-        .ok()
-        .and_then(|text| text.parse::<toml::Table>().ok())
-        .is_some_and(|config| {
-            config
-                .get("cli")
-                .and_then(|cli| cli.get("installer"))
-                .and_then(toml::Value::as_str)
-                == Some("npm")
-        })
+    false
 }
 
 fn plan_for_install(tool: &str, inst: &ToolInstallation) -> Result<ToolUninstallPlan, String> {

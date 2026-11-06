@@ -1,23 +1,15 @@
 import { useQueryClient } from "@tanstack/react-query";
 import type { AppId } from "@/lib/api/types";
 import type { UsageResult } from "@/types";
-import type { SubscriptionQuota } from "@/types/subscription";
 import { usageKeys } from "@/lib/query/usage";
-import { subscriptionKeys } from "@/lib/query/subscription";
 import { useTauriEvent } from "./useTauriEvent";
 
-type UsageCacheUpdatedPayload =
-  | {
-      kind: "script";
-      appType: AppId;
-      providerId: string;
-      data: UsageResult;
-    }
-  | {
-      kind: "subscription";
-      appType: AppId;
-      data: SubscriptionQuota;
-    };
+type UsageCacheUpdatedPayload = {
+  kind: "script";
+  appType: AppId;
+  providerId: string;
+  data: UsageResult;
+};
 
 /**
  * 后端 `UsageCache` 写入后会 emit `usage-cache-updated`，本 hook 把 payload 同步到
@@ -31,11 +23,6 @@ export function useUsageCacheBridge() {
     if (payload.kind === "script") {
       queryClient.setQueryData<UsageResult>(
         usageKeys.script(payload.providerId, payload.appType),
-        payload.data,
-      );
-    } else if (payload.kind === "subscription") {
-      queryClient.setQueryData<SubscriptionQuota>(
-        subscriptionKeys.quota(payload.appType),
         payload.data,
       );
     }

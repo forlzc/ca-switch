@@ -28,28 +28,14 @@ export interface RequestLog {
   totalCostUsd: string;
   isStreaming: boolean;
   latencyMs: number;
-  /** 路由服务记的是精确首字；会话日志导入的是按时间戳推出来的估算值（看 dataSource） */
+  /** 路由服务记的首字时间 */
   firstTokenMs?: number;
   durationMs?: number;
   statusCode: number;
   errorMessage?: string;
   createdAt: number;
+  /** 仅表示代理流量来源（当前固定为 proxy） */
   dataSource?: string;
-}
-
-export interface SessionSyncResult {
-  imported: number;
-  skipped: number;
-  filesScanned: number;
-  suspectedDuplicates: number;
-  deferredFiles: number;
-  errors: string[];
-}
-
-export interface DataSourceSummary {
-  dataSource: string;
-  requestCount: number;
-  totalCostUsd: string;
 }
 
 export interface PaginatedLogs {
@@ -126,14 +112,8 @@ export interface ProviderStats {
   speedOutputTokens?: number;
   /** 速度分母：同一批请求的（耗时 − 首字）之和，毫秒 */
   speedGenerationMs?: number;
-  /** 估算速度分子：会话日志导入、有估算耗时、输出 ≥ 200 token 的请求的输出之和 */
-  estSpeedOutputTokens?: number;
-  /** 估算速度分母：同一批请求的估算耗时（含首字等待）之和，毫秒 */
-  estSpeedDurationMs?: number;
   /** 首字时间中位数（毫秒）：经路由服务、成功的流式明细请求；没有时为 null */
   firstTokenMedianMs?: number | null;
-  /** 估算首字中位数（毫秒）：会话日志导入、按时间戳推出了首字的请求；没有精确值时才显示，带 ≈ */
-  estFirstTokenMedianMs?: number | null;
 }
 
 export interface ModelStats {
@@ -144,18 +124,14 @@ export interface ModelStats {
   totalCost: string;
   avgCostPerRequest: string;
   successRate: number;
-  /** 速度分子分母，口径同 ProviderStats 的四个速度字段 */
+  /** 速度分子分母，口径同 ProviderStats */
   speedOutputTokens?: number;
   speedGenerationMs?: number;
-  estSpeedOutputTokens?: number;
-  estSpeedDurationMs?: number;
-  /** 首字时间中位数，口径同 ProviderStats 的那两个字段 */
+  /** 首字时间中位数，口径同 ProviderStats */
   firstTokenMedianMs?: number | null;
-  estFirstTokenMedianMs?: number | null;
 }
 
 export interface LogFilters {
-  appType?: string;
   providerName?: string;
   model?: string;
   statusCode?: number;
@@ -172,7 +148,6 @@ export interface LogFilters {
  *   与模型统计的分组口径一致）。
  */
 export interface UsageScopeFilters {
-  appType?: string;
   providerName?: string;
   model?: string;
 }

@@ -16,7 +16,7 @@ import {
 } from "@/lib/api";
 import { checkAllEnvConflicts, checkEnvConflicts } from "@/lib/api/env";
 import { useProviderActions } from "@/hooks/useProviderActions";
-import type { ProviderEditorSave } from "@/lib/api/providers";
+
 import {
   useTrayAppPageSeen,
   useTrayNavigation,
@@ -50,7 +50,6 @@ import { AddProviderDialog } from "@/components/providers/AddProviderDialog";
 import { EditProviderDialog } from "@/components/providers/EditProviderDialog";
 import { CustomProviderPanel } from "@/components/providers/CustomProviderPanel";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { OpenTerminalDialog } from "@/components/providers/OpenTerminalDialog";
 import { discardUnsavedChanges, hasUnsavedChanges } from "@/lib/unsavedChanges";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { UsagePage } from "@/components/usage/UsagePage";
@@ -86,7 +85,6 @@ function App() {
   const [currentView, setCurrentView] = useState<View>(readStoredView);
   const [settingsSection, setSettingsSection] =
     useState<SettingsSection>("general");
-  const [appConfigScrollTarget, setAppConfigScrollTarget] = useState<AppId>();
   // 进设置前停留的页面：设置目录里的「← 返回」回到这里
   const settingsReturnViewRef = useRef<View>("providers");
   const [isAddOpen, setIsAddOpen] = useState(false);
@@ -115,9 +113,6 @@ function App() {
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
   const [usageProvider, setUsageProvider] = useState<Provider | null>(null);
   const [confirmProvider, setConfirmProvider] = useState<Provider | null>(null);
-  const [terminalProvider, setTerminalProvider] = useState<Provider | null>(
-    null,
-  );
   const [envConflicts, setEnvConflicts] = useState<EnvConflict[]>([]);
   const [showEnvBanner, setShowEnvBanner] = useState(false);
 
@@ -464,17 +459,13 @@ function App() {
     return true;
   };
 
-  const openSettings = (
-    section: SettingsSection = "general",
-    appConfigTarget?: AppId,
-  ) => {
-    if (confirmLeave(() => openSettings(section, appConfigTarget))) return;
+  const openSettings = (section: SettingsSection = "general") => {
+    if (confirmLeave(() => openSettings(section))) return;
     closeProviderPanels();
     if (currentViewRef.current !== "settings") {
       settingsReturnViewRef.current = currentViewRef.current;
     }
     setSettingsSection(section);
-    setAppConfigScrollTarget(appConfigTarget);
     setCurrentView("settings");
   };
 
@@ -515,7 +506,7 @@ function App() {
   });
 
   const openPageFromNav = (page: GlobalPage | "settings") => {
-    // 「设置」上的绿点说的是 CC Switch 有新版本，点进去直接到「关于」里的更新按钮
+    // 「设置」上的绿点说的是 CA Switch 有新版本，点进去直接到「关于」里的更新按钮
     if (page === "settings" && hasUpdate) {
       openSettings("about");
       return;
@@ -568,13 +559,11 @@ function App() {
   const handleEditProvider = async ({
     provider,
     originalId,
-    editorSave,
   }: {
     provider: Provider;
     originalId?: string;
-    editorSave?: ProviderEditorSave;
   }) => {
-    await updateProvider(provider, originalId, editorSave);
+    await updateProvider(provider, originalId);
     setEditingProvider(null);
   };
 
@@ -674,11 +663,6 @@ function App() {
         <DropdownMenuItem onSelect={() => openPage("usage")}>
           {t("appPage.viewUsage")}
         </DropdownMenuItem>
-        <DropdownMenuItem
-          onSelect={() => openSettings("appConfig", ACTIVE_APP)}
-        >
-          {t("appPage.configDirectory")}
-        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -686,7 +670,7 @@ function App() {
   const renderAppPageHeader = () => (
     <AppPageHeader
       variant="app"
-      icon={<AppGlyph app={ACTIVE_APP} size={20} badgeClassName="bg-app" />}
+      icon={<AppGlyph size={20} />}
       title={APP_DISPLAY_NAME[ACTIVE_APP]}
       actions={
         <>
@@ -735,7 +719,6 @@ function App() {
     onDuplicate: handleDuplicateProvider,
     onConfigureUsage: setUsageProvider,
     onOpenWebsite: handleOpenWebsite,
-    onOpenTerminal: setTerminalProvider,
     onCreate: openAddProvider,
     searchOpen: providerSearchOpen,
     onSearchOpenChange: setProviderSearchOpen,
@@ -764,10 +747,7 @@ function App() {
   const renderGlobalPage = () => {
     if (currentView === "usage") {
       return (
-        <UsagePage
-          initialAppType="all"
-          onOpenRoutingSettings={() => openSettings("routing")}
-        />
+        <UsagePage onOpenRoutingSettings={() => openSettings("routing")} />
       );
     }
     return null;
@@ -778,7 +758,6 @@ function App() {
       return (
         <SettingsPage
           section={settingsSection}
-          appConfigScrollTarget={appConfigScrollTarget}
           onImportSuccess={handleImportSuccess}
         />
       );
@@ -798,10 +777,7 @@ function App() {
           settingsSection={settingsSection}
           onSelectApp={selectApp}
           onSelectPage={openPageFromNav}
-          onSelectSettingsSection={(section) => {
-            setAppConfigScrollTarget(undefined);
-            setSettingsSection(section);
-          }}
+          onSelectSettingsSection={setSettingsSection}
           onExitSettings={exitSettings}
         />
         <main
@@ -879,12 +855,6 @@ function App() {
           }}
         />
       )}
-
-      <OpenTerminalDialog
-        provider={terminalProvider}
-        appId={ACTIVE_APP}
-        onClose={() => setTerminalProvider(null)}
-      />
 
       <ConfirmDialog
         isOpen={Boolean(confirmProvider)}

@@ -284,7 +284,7 @@ function AppRow({
       )}
     >
       <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-black/[0.05] dark:bg-white/[0.08]">
-        <AppGlyph app={app.app} size={20} badgeClassName="bg-transparent" />
+        <AppGlyph size={20} />
       </span>
       <span className="min-w-0">
         <span className="flex items-center gap-1.5">
@@ -1023,7 +1023,7 @@ export function TrayPanel() {
           data-other-item
           className="flex shrink-0 items-center px-4 pb-2 pt-3"
         >
-          <span className="text-[15px] font-semibold">CC Switch</span>
+          <span className="text-[15px] font-semibold">CA Switch</span>
           <button
             type="button"
             title={texts.settings}

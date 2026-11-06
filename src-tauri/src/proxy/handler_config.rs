@@ -200,29 +200,4 @@ pub const CLAUDE_HANDLER_CONFIG: HandlerConfig = HandlerConfig {
     parser_config: &CLAUDE_PARSER_CONFIG,
 };
 
-/// Codex Chat Completions Handler 配置
-#[allow(dead_code)]
-pub const CODEX_CHAT_HANDLER_CONFIG: HandlerConfig = HandlerConfig {
-    app_type: AppType::Codex,
-    tag: "Codex",
-    app_type_str: "codex",
-    parser_config: &OPENAI_PARSER_CONFIG,
-};
 
-/// Codex Responses Handler 配置
-#[allow(dead_code)]
-pub const CODEX_RESPONSES_HANDLER_CONFIG: HandlerConfig = HandlerConfig {
-    app_type: AppType::Codex,
-    tag: "Codex",
-    app_type_str: "codex",
-    parser_config: &CODEX_PARSER_CONFIG,
-};
-
-/// Gemini Handler 配置
-#[allow(dead_code)]
-pub const GEMINI_HANDLER_CONFIG: HandlerConfig = HandlerConfig {
-    app_type: AppType::Gemini,
-    tag: "Gemini",
-    app_type_str: "gemini",
-    parser_config: &GEMINI_PARSER_CONFIG,
-};

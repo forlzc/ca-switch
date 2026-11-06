@@ -24,10 +24,10 @@
     },
     {
       "type": "fix",
-      "zh": "修复 WSL 上 CC Switch 启动后直接退出",
-      "zh-TW": "修正 WSL 上 CC Switch 啟動後直接退出",
-      "en": "Fixed CC Switch exiting right after launch on WSL",
-      "ja": "WSL で CC Switch が起動直後に終了する問題を修正"
+      "zh": "修复 WSL 上 CA Switch 启动后直接退出",
+      "zh-TW": "修正 WSL 上 CA Switch 啟動後直接退出",
+      "en": "Fixed CA Switch exiting right after launch on WSL",
+      "ja": "WSL で CA Switch が起動直後に終了する問題を修正"
     }
   ]
 }

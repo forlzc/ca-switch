@@ -8,7 +8,7 @@ use crate::proxy::{
     extract_session_id,
     forwarder::RequestForwarder,
     server::ProxyState,
-    types::{AppProxyConfig, CopilotOptimizerConfig, OptimizerConfig, RectifierConfig},
+    types::{AppProxyConfig, OptimizerConfig, RectifierConfig},
     ProxyError,
 };
 use axum::http::HeaderMap;
@@ -68,8 +68,6 @@ pub struct RequestContext {
     pub rectifier_config: RectifierConfig,
     /// 优化器配置
     pub optimizer_config: OptimizerConfig,
-    /// Copilot 优化器配置
-    pub copilot_optimizer_config: CopilotOptimizerConfig,
 }
 
 impl RequestContext {
@@ -144,7 +142,6 @@ impl RequestContext {
         // 从数据库读取整流器配置
         let rectifier_config = state.db.get_rectifier_config().unwrap_or_default();
         let optimizer_config = state.db.get_optimizer_config().unwrap_or_default();
-        let copilot_optimizer_config = state.db.get_copilot_optimizer_config().unwrap_or_default();
 
         // 提取 Session ID
         let session_result = extract_session_id(headers, body, app_type_str);
@@ -227,7 +224,6 @@ impl RequestContext {
             session_client_provided: session_result.client_provided,
             rectifier_config,
             optimizer_config,
-            copilot_optimizer_config,
         })
     }
 
@@ -294,7 +290,6 @@ impl RequestContext {
             idle_timeout,
             self.rectifier_config.clone(),
             self.optimizer_config.clone(),
-            self.copilot_optimizer_config.clone(),
             max_retries,
         )
     }

@@ -74,10 +74,6 @@ pub enum ProxyError {
     #[error("认证失败: {0}")]
     AuthError(String),
 
-    /// Local pre-exhaustion policy, never an upstream usage-limit response.
-    #[error("Codex 官方额度保护 (quota protection): {0}")]
-    CodexQuotaProtection(String),
-
     #[allow(dead_code)]
     #[error("内部错误: {0}")]
     Internal(String),
@@ -165,9 +161,6 @@ impl IntoResponse for ProxyError {
                         (StatusCode::GATEWAY_TIMEOUT, self.to_string())
                     }
                     ProxyError::AuthError(_) => (StatusCode::UNAUTHORIZED, self.to_string()),
-                    ProxyError::CodexQuotaProtection(_) => {
-                        (StatusCode::FORBIDDEN, self.to_string())
-                    }
                     ProxyError::Internal(_) => {
                         (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
                     }

@@ -10,10 +10,6 @@ export interface EndpointLatencyResult {
 }
 
 export const vscodeApi = {
-  async getLiveProviderSettings(appId: AppId) {
-    return await invoke("read_live_provider_settings", { app: appId });
-  },
-
   async testApiEndpoints(
     urls: string[],
     options?: { timeoutSecs?: number },

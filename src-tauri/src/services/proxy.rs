@@ -6,11 +6,8 @@ use crate::app_config::AppType;
 use crate::database::Database;
 use crate::provider::Provider;
 use crate::proxy::server::ProxyServer;
-use crate::proxy::switch_lock::SwitchLockManager;
 use crate::proxy::types::*;
-use serde_json::Value;
 use std::sync::Arc;
-use tauri::Emitter;
 use tokio::sync::RwLock;
 
 #[derive(Clone)]
@@ -19,7 +16,6 @@ pub struct ProxyService {
     server: Arc<RwLock<Option<ProxyServer>>>,
     /// AppHandle，用于传递给 ProxyServer 以支持故障转移时的 UI 更新
     app_handle: Arc<RwLock<Option<tauri::AppHandle>>>,
-    switch_locks: SwitchLockManager,
 }
 
 /// 重启失败时写回库的那份配置：设置页只动四个全局字段，旧接口是整份七个字段。
@@ -38,28 +34,12 @@ impl SavedProxyConfig {
     }
 }
 
-/// 客户端连接代理用的地址。`host` 是设置里的客户端地址，没设时是监听地址，后者可能是
-/// `0.0.0.0` / `::`（监听所有网卡），客户端连不上这个地址，改用本机回环；IPv6 加方括号。
-pub(crate) fn proxy_origin(host: &str, listen_port: u16) -> String {
-    let host = match host {
-        "0.0.0.0" => "127.0.0.1",
-        "::" => "::1",
-        other => other,
-    };
-    if host.contains(':') && !host.starts_with('[') {
-        format!("http://[{host}]:{listen_port}")
-    } else {
-        format!("http://{host}:{listen_port}")
-    }
-}
-
 impl ProxyService {
     pub fn new(db: Arc<Database>) -> Self {
         Self {
             db,
             server: Arc::new(RwLock::new(None)),
             app_handle: Arc::new(RwLock::new(None)),
-            switch_locks: SwitchLockManager::new(),
         }
     }
 
@@ -70,12 +50,6 @@ impl ProxyService {
         });
     }
 
-    pub(crate) async fn lock_switch_for_app(
-        &self,
-        app_type: &str,
-    ) -> tokio::sync::OwnedMutexGuard<()> {
-        self.switch_locks.lock_for_app(app_type).await
-    }
 
     /// 启动代理服务器。成功、失败都让托盘比对一次（图标圆点、问题区、「退出」的后果跟着变）。
     pub async fn start(&self) -> Result<ProxyServerInfo, String> {
@@ -185,13 +159,6 @@ impl ProxyService {
         }
     }
 
-    pub(crate) async fn emit(&self, event: &str, payload: Value) {
-        if let Some(handle) = self.app_handle.read().await.as_ref() {
-            if let Err(error) = handle.emit(event, payload) {
-                log::warn!("发送事件 {event} 失败: {error}");
-            }
-        }
-    }
 
     async fn stop_server(&self) -> Result<(), String> {
         if let Some(server) = self.server.write().await.take() {
@@ -221,30 +188,6 @@ impl ProxyService {
         }
     }
 
-    /// 构造写入 Live 的代理地址（处理 0.0.0.0 / IPv6 等特殊情况）
-    pub(crate) async fn build_proxy_urls(&self) -> Result<(String, String), String> {
-        let config = self
-            .db
-            .get_proxy_config()
-            .await
-            .map_err(|e| format!("获取代理配置失败: {e}"))?;
-
-        let mut listen_port = config.listen_port;
-        if let Some(server) = self.server.read().await.as_ref() {
-            let status = server.get_status().await;
-            if status.running {
-                listen_port = status.port;
-            }
-        }
-        if listen_port == 0 {
-            return Err("代理监听端口为 0，但代理服务器尚未运行，无法生成接管地址".to_string());
-        }
-
-        let host = crate::settings::get_proxy_client_host().unwrap_or(config.listen_address);
-        let proxy_url = proxy_origin(&host, listen_port);
-        let proxy_codex_base_url = format!("{proxy_url}/v1");
-        Ok((proxy_url, proxy_codex_base_url))
-    }
 
     // ==================== 原有方法 ====================
 
@@ -459,9 +402,11 @@ impl ProxyService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
+
     async fn seed_distinct_app_proxy_configs(db: &Database) -> Vec<Value> {
         let mut configs = Vec::new();
-        for (app, retries) in [("claude", 6), ("codex", 0), ("gemini", 2), ("grokbuild", 3)] {
+        for (app, retries) in [("claude", 6)] {
             let mut config = db.get_proxy_config_for_app(app).await.unwrap();
             config.enabled = retries % 2 == 0;
             config.auto_failover_enabled = retries % 2 != 0;

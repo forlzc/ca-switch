@@ -1,10 +1,10 @@
 # CA Switch
 
-CA Switch 是一个本地协议网关：把 **Claude Code / Codex / OpenAI Chat / Gemini** 四条入口
+CA Switch 是一个本地协议网关：把 **Anthropic / OpenAI Chat / OpenAI Responses / Gemini** 四条协议入口
 统一转发到同一个当前激活的供应商，并允许在供应商之间一键切换。
 
 - 只提供协议入口，不写任何客户端配置文件
-- 供应商协议自动推断（`api_format` → `wire_api` → base URL 后缀 → 家族兜底）
+- 供应商协议自动推断（`api_format` → base URL 后缀 → 家族兜底）
 - 入口协议与上游协议不一致时走转换矩阵；没有转换器的组合返回 `501` 与可读说明
 - 支持故障转移，但只在**同协议**供应商之间切换
 
@@ -12,11 +12,11 @@ CA Switch 是一个本地协议网关：把 **Claude Code / Codex / OpenAI Chat 
 
 默认监听 `127.0.0.1:15721`：
 
-| 入口 | Base URL |
+| 入口协议 | Base URL |
 |---|---|
-| Claude Code | `http://127.0.0.1:15721` |
-| Codex | `http://127.0.0.1:15721/v1` |
-| OpenAI Chat | `http://127.0.0.1:15721/v1` |
+| Anthropic Messages | `http://127.0.0.1:15721` |
+| OpenAI Chat Completions | `http://127.0.0.1:15721/v1` |
+| OpenAI Responses | `http://127.0.0.1:15721/v1` |
 | Gemini | `http://127.0.0.1:15721/v1beta` |
 
 端口以实际监听为准，可在设置中修改。

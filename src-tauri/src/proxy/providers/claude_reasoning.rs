@@ -64,7 +64,7 @@ fn decide(body: &Value, provider: &Provider, base_url: &str) -> (EffortPlan, &'s
     if super::transform::supports_reasoning_effort(model) {
         return (EffortPlan::Unchanged, "known-model");
     }
-    if is_managed_account(provider, base_url) {
+    if is_managed_account(base_url) {
         return (EffortPlan::Unchanged, "managed-account");
     }
     if is_known_non_reasoning_model(model) {
@@ -135,11 +135,8 @@ fn override_mode(provider: &Provider) -> Option<&str> {
         .filter(|mode| OVERRIDE_MODES.contains(mode))
 }
 
-fn is_managed_account(provider: &Provider, base_url: &str) -> bool {
-    provider.is_github_copilot()
-        || provider.is_codex_oauth()
-        || provider.is_xai_oauth()
-        || base_url.contains("githubcopilot.com")
+fn is_managed_account(base_url: &str) -> bool {
+    base_url.contains("githubcopilot.com")
 }
 
 /// 客户端要的档位，不按目标模型折算。关思考时为 `None`。

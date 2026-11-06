@@ -374,27 +374,9 @@ fn row_to_request_log_detail(row: &rusqlite::Row<'_>) -> rusqlite::Result<Reques
     })
 }
 
-/// SQL fragment: resolve provider_name with fallback for session-based entries.
-/// Session logs use placeholder provider_ids (e.g., `_session`, `_<app>_session`)
-/// that don't exist in the providers table — the CASE expression below is the
-/// authoritative mapping from placeholder to readable name.
+/// SQL fragment: 供应商展示名优先取 providers 表的当前名称，删除后回落到日志里的 id。
 fn provider_name_coalesce(log_alias: &str, provider_alias: &str) -> String {
-    format!(
-        "COALESCE({provider_alias}.name, CASE {log_alias}.provider_id \
-         WHEN '_session' THEN 'Claude (Session)' \
-         WHEN '_codex_session' THEN 'Codex (Session)' \
-         WHEN '_gemini_session' THEN 'Gemini (Session)' \
-         WHEN '_opencode_session' THEN 'OpenCode (Session)' \
-         WHEN '_grok_session' THEN 'Grok Build (Session)' \
-         WHEN '_agy_session' THEN 'Antigravity (Session)' \
-         WHEN '_kimi_session' THEN 'Kimi Code (Session)' \
-         WHEN '_dsh_session' THEN 'DeepSeek Harness (Session)' \
-         WHEN '_dsh_account_session' THEN 'DeepSeek Harness (OAuth)' \
-         WHEN '_mcode_session' THEN 'MiniMax Code (Session)' \
-         WHEN '_pi_session' THEN 'Pi (Session)' \
-         WHEN '_omp_session' THEN 'Oh My Pi (Session)' \
-         ELSE {log_alias}.provider_id END)"
-    )
+    format!("COALESCE({provider_alias}.name, {log_alias}.provider_id)")
 }
 
 pub(crate) const SESSION_PROXY_DEDUP_WINDOW_SECONDS: i64 = 10 * 60;
@@ -2803,10 +2785,7 @@ fn clean_model_id_for_pricing(model_id: &str) -> String {
         .replace('@', "-")
         .to_ascii_lowercase();
 
-    normalized
-        .trim_end_matches(crate::claude_desktop_config::ONE_M_CONTEXT_MARKER)
-        .trim()
-        .to_string()
+    normalized.trim().to_string()
 }
 
 fn push_unique_candidate(candidates: &mut Vec<String>, candidate: String) -> bool {
@@ -4556,7 +4535,7 @@ mod tests {
         let session = db
             .get_request_detail("session:msg_1")?
             .expect("session row");
-        assert_eq!(session.provider_name.as_deref(), Some("Claude (Session)"));
+        assert_eq!(session.provider_name.as_deref(), Some("_session"));
         assert_eq!(session.created_at, ts);
 
         assert!(db.get_request_detail("missing")?.is_none());
@@ -4672,8 +4651,8 @@ mod tests {
         let by_real = db.get_usage_summary(None, None, None, None, Some("real-model"))?;
         assert_eq!(by_real.total_requests, 1);
 
-        // ④ 会话占位行可按可读名选中。
-        let session = db.get_usage_summary(None, None, None, Some("Claude (Session)"), None)?;
+        // ④ 会话占位行可按 provider id 选中。
+        let session = db.get_usage_summary(None, None, None, Some("_session"), None)?;
         assert_eq!(session.total_requests, 1);
 
         // ⑤ Provider 统计 + 模型过滤：只剩 DeepSeek 一行。
@@ -4965,28 +4944,6 @@ mod tests {
         assert!(!request_ids.contains(&"codex-session-dup"));
         assert!(!request_ids.contains(&"claude-session-dup"));
         assert!(!request_ids.contains(&"gemini-session-dup"));
-
-        let breakdown = crate::services::session_usage::get_data_source_breakdown(&db)?;
-        let proxy_count = breakdown
-            .iter()
-            .find(|item| item.data_source == "proxy")
-            .map(|item| item.request_count);
-        let codex_session_count = breakdown
-            .iter()
-            .find(|item| item.data_source == "codex_session")
-            .map(|item| item.request_count);
-        let gemini_session_count = breakdown
-            .iter()
-            .find(|item| item.data_source == "gemini_session")
-            .map(|item| item.request_count);
-        let session_log_count = breakdown
-            .iter()
-            .find(|item| item.data_source == "session_log")
-            .map(|item| item.request_count);
-        assert_eq!(proxy_count, Some(3));
-        assert_eq!(codex_session_count, Some(1));
-        assert_eq!(gemini_session_count, None);
-        assert_eq!(session_log_count, None);
 
         Ok(())
     }
@@ -5511,37 +5468,6 @@ mod tests {
         // 估算的不混进精确口径
         assert_eq!(stats[0].speed_output_tokens, 0);
         assert_eq!(stats[0].speed_generation_ms, 0);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_get_provider_stats_labels_opencode_session_provider() -> Result<(), AppError> {
-        let db = Database::memory()?;
-
-        {
-            let conn = lock_conn!(db.conn);
-            insert_usage_log(
-                &conn,
-                "opencode-session",
-                "opencode",
-                "_opencode_session",
-                "opencode-model",
-                "opencode_session",
-                1000,
-                100,
-                50,
-                0,
-                0,
-                200,
-                "0.01",
-            )?;
-        }
-
-        let stats = db.get_provider_stats(None, None, Some("opencode"), None, None)?;
-        assert_eq!(stats.len(), 1);
-        assert_eq!(stats[0].provider_id, "_opencode_session");
-        assert_eq!(stats[0].provider_name, "OpenCode (Session)");
 
         Ok(())
     }

@@ -118,7 +118,6 @@ describe.each(["footer", "collapsed card"] as const)(
     it.each([
       { appId: "claude" as const, isCurrent: false },
       { appId: "claude" as const, isCurrent: true },
-      { appId: "opencode" as const, isCurrent: false },
     ])("refreshes every minute for %j", async (options) => {
       await renderUsage(options);
       expect(query).toHaveBeenCalledTimes(1);

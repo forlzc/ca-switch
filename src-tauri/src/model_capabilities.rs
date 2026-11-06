@@ -271,11 +271,6 @@ fn normalize_model_id(value: &str) -> String {
         .trim_start_matches("models/")
         .trim()
         .to_ascii_lowercase();
-    if let Some(stripped) =
-        normalized.strip_suffix(crate::claude_desktop_config::ONE_M_CONTEXT_MARKER)
-    {
-        normalized = stripped.trim().to_string();
-    }
     normalized
 }
 
@@ -305,8 +300,8 @@ mod tests {
         assert!(is_confirmed_text_only_model(
             "deepseek/deepseek-v4-flash-0731"
         ));
-        assert!(is_confirmed_text_only_model("GLM-5.2[1M]"));
-        assert!(is_confirmed_text_only_model("GLM-5.3[1M]"));
+        assert!(is_confirmed_text_only_model("GLM-5.2"));
+        assert!(is_confirmed_text_only_model("GLM-5.3"));
         assert!(is_confirmed_text_only_model("qwen/qwen3-coder-plus"));
         assert!(is_confirmed_text_only_model(
             "Qwen/Qwen3-Coder-480B-A35B-Instruct"

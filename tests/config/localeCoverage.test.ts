@@ -123,25 +123,6 @@ describe("Turkish locale", () => {
 
   it("preserves protocol fields, configuration literals, and commands", () => {
     const translations = flattenStrings(tr);
-    const exactLiterals = [
-      "opencode.extraOptionKeyPlaceholder",
-      "opencode.modelExtraFieldKeyPlaceholder",
-      "opencode.modelOptionKeyPlaceholder",
-      "opencode.modelOptionValuePlaceholder",
-      "opencode.providerKeyPlaceholder",
-      "openclaw.providerKeyPlaceholder",
-      "hermes.form.providerKeyPlaceholder",
-      "grokBuild.rawConfig",
-      "codexConfig.configToml",
-      "providerPreset.plan.aksk",
-      "mcp.envPlaceholder",
-      "mcp.wizard.envPlaceholder",
-      "skills.searchSource.skillssh",
-    ];
-
-    for (const key of exactLiterals) {
-      expect(translations.get(key), key).toBe(reference.get(key));
-    }
 
     expect(translations.get("usageScript.fieldRemaining")).toContain(
       "• remaining:",
@@ -155,15 +136,6 @@ describe("Turkish locale", () => {
     );
     expect(translations.get("settings.s3Sync.presets.cosHint")).toContain(
       "ap-beijing",
-    );
-    expect(translations.get("hermes.webui.launchConfirmMessage")).toContain(
-      "pip install hermes-agent[web]",
-    );
-    expect(
-      translations.get("settings.manualUninstallBunLauncherHint"),
-    ).toContain("OpenClaw Bun launcher");
-    expect(translations.get("prompts.contentPlaceholderHermes")).toMatch(
-      /^# SOUL\.md\n/,
     );
   });
 });

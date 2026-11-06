@@ -12,29 +12,13 @@ import { usageTable } from "./usageTable";
 export interface SpeedTotals {
   speedOutputTokens?: number;
   speedGenerationMs?: number;
-  estSpeedOutputTokens?: number;
-  estSpeedDurationMs?: number;
   firstTokenMedianMs?: number | null;
-  estFirstTokenMedianMs?: number | null;
 }
 
 /** 一行的汇总速度：Σ输出 ÷ Σ生成时间。 */
 export function getStatsSpeed(stat: SpeedTotals): string | null {
   return formatTokensPerSecond(
     getAggregateTokensPerSecond(stat.speedOutputTokens, stat.speedGenerationMs),
-  );
-}
-
-/**
- * 会话日志导入的请求的汇总估算速度：Σ输出 ÷ Σ估算耗时（含首字等待）。
- * 没有精确速度时才拿它顶上，显示时前面带 ≈。
- */
-export function getStatsEstimatedSpeed(stat: SpeedTotals): string | null {
-  return formatTokensPerSecond(
-    getAggregateTokensPerSecond(
-      stat.estSpeedOutputTokens,
-      stat.estSpeedDurationMs,
-    ),
   );
 }
 
@@ -66,22 +50,14 @@ export function PerformanceHeaders() {
   );
 }
 
-/** 「成功率」「速度」「首字」三列的单元格；精确值缺失时用会话日志的估算值，带 ≈。 */
+/** 「成功率」「速度」「首字」三列的单元格。 */
 export function PerformanceCells({
   stat,
 }: {
   stat: SpeedTotals & { successRate: number };
 }) {
-  const exactSpeed = getStatsSpeed(stat);
-  const estimatedSpeed =
-    exactSpeed == null ? getStatsEstimatedSpeed(stat) : null;
-  const speed = exactSpeed ?? estimatedSpeed;
-  const exactFirstToken = formatFirstTokenSeconds(stat.firstTokenMedianMs);
-  const estimatedFirstToken =
-    exactFirstToken == null
-      ? formatFirstTokenSeconds(stat.estFirstTokenMedianMs)
-      : null;
-  const firstToken = exactFirstToken ?? estimatedFirstToken;
+  const speed = getStatsSpeed(stat);
+  const firstToken = formatFirstTokenSeconds(stat.firstTokenMedianMs);
   return (
     <>
       <td className={cn(usageTable.td, usageTable.groupGap)}>
@@ -92,7 +68,6 @@ export function PerformanceCells({
           "—"
         ) : (
           <>
-            {estimatedSpeed != null && "≈"}
             {speed}
             <span className="ms-0.5 text-badge font-normal text-fg-3">
               tok/s
@@ -101,7 +76,6 @@ export function PerformanceCells({
         )}
       </td>
       <td className={cn(usageTable.td, firstToken == null && usageTable.muted)}>
-        {estimatedFirstToken != null && "≈"}
         {firstToken ?? "—"}
       </td>
     </>

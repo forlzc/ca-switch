@@ -74,31 +74,10 @@ impl Protocol {
         }
     }
 
-    /// 迁移兜底：没有任何显式证据时，按原客户端家族推定。
-    ///
-    /// 只在 `api_format` 与 `wire_api` 都读不到时才用得上，所以这里宁可按
-    /// 家族惯例，不做 base_url 嗅探（那属于迁移脚本的第二级证据）。
-    ///
-    /// 判定依据：
-    /// - anthropic 家族：`Claude` / `Claude Desktop` 原生就是 Messages API。
-    /// - responses 家族：`Codex` 与 `GrokBuild` 的 wire_api 缺省即 responses；
-    ///   注意若供应商配置里有 `wire_api = "chat"`，迁移脚本会优先采信它。
-    /// - gemini 家族：`Gemini` 原生；`Agy` 的投影读的就是
-    ///   `GOOGLE_GEMINI_BASE_URL`（`agy_config.rs:113`），同一协议。
-    /// - 其余（openai 兼容的本地工具）：按 chat 处理。
-    pub fn from_app_type(app: &AppType) -> Self {
-        match app {
-            AppType::Claude | AppType::ClaudeDesktop => Protocol::Anthropic,
-            AppType::Codex | AppType::GrokBuild => Protocol::OpenAiResponses,
-            AppType::Gemini | AppType::Agy => Protocol::Gemini,
-            AppType::OpenCode
-            | AppType::OpenClaw
-            | AppType::Hermes
-            | AppType::Pi
-            | AppType::Mcode
-            | AppType::Kimi
-            | AppType::Dsh
-            | AppType::Omp => Protocol::OpenAiChat,
+    /// 唯一的 API 入口原生使用 Anthropic Messages API。
+    pub fn from_app_type(_app: &AppType) -> Self {
+        match _app {
+            AppType::Claude => Protocol::Anthropic,
         }
     }
 }
@@ -140,15 +119,6 @@ pub enum AuthStyle {
     /// 静态 API key（Bearer 或 `x-api-key`）。
     #[serde(rename = "api_key")]
     ApiKey,
-    /// Codex OAuth（`data_dir/codex_oauth_auth.json`）。
-    #[serde(rename = "codex_oauth")]
-    CodexOauth,
-    /// xAI OAuth。
-    #[serde(rename = "xai_oauth")]
-    XaiOauth,
-    /// GitHub Copilot 托管鉴权。
-    #[serde(rename = "copilot")]
-    Copilot,
     /// 无需鉴权（本地模型、内网网关）。
     #[serde(rename = "none")]
     None,
@@ -158,9 +128,6 @@ impl AuthStyle {
     pub const fn as_str(self) -> &'static str {
         match self {
             AuthStyle::ApiKey => "api_key",
-            AuthStyle::CodexOauth => "codex_oauth",
-            AuthStyle::XaiOauth => "xai_oauth",
-            AuthStyle::Copilot => "copilot",
             AuthStyle::None => "none",
         }
     }
@@ -168,9 +135,6 @@ impl AuthStyle {
     pub fn from_str_opt(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "api_key" | "apikey" => Some(AuthStyle::ApiKey),
-            "codex_oauth" => Some(AuthStyle::CodexOauth),
-            "xai_oauth" => Some(AuthStyle::XaiOauth),
-            "copilot" | "github_copilot" => Some(AuthStyle::Copilot),
             "none" => Some(AuthStyle::None),
             _ => None,
         }
@@ -443,128 +407,6 @@ pub mod infer {
         None
     }
 
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use crate::provider::ProviderMeta;
-        use serde_json::json;
-
-        fn provider(settings: Value, api_format: Option<&str>) -> Provider {
-            Provider {
-                id: "p".to_string(),
-                name: "p".to_string(),
-                settings_config: settings,
-                website_url: None,
-                category: None,
-                created_at: None,
-                sort_index: None,
-                notes: None,
-                meta: api_format.map(|value| ProviderMeta {
-                    api_format: Some(value.to_string()),
-                    ..Default::default()
-                }),
-                icon: None,
-                icon_color: None,
-                in_failover_queue: false,
-            }
-        }
-
-        #[test]
-        fn explicit_api_format_wins_over_everything_else() {
-            // URL 看着像 anthropic，但用户显式选了 openai_chat
-            let p = provider(
-                json!({ "env": { "ANTHROPIC_BASE_URL": "https://relay.example.com/v1/messages" } }),
-                Some("openai_chat"),
-            );
-            assert_eq!(
-                of_provider(&AppType::Claude, &p),
-                (Protocol::OpenAiChat, ProtocolSource::Explicit)
-            );
-        }
-
-        #[test]
-        fn codex_wire_api_is_read_from_the_active_provider_table() {
-            let toml = r#"
-model_provider = "relay"
-model = "gpt-5"
-
-[model_providers.relay]
-base_url = "https://relay.example.com/v1"
-wire_api = "chat"
-"#;
-            let p = provider(json!({ "config": toml }), None);
-            assert_eq!(
-                of_provider(&AppType::Codex, &p),
-                (Protocol::OpenAiChat, ProtocolSource::Inferred)
-            );
-        }
-
-        #[test]
-        fn codex_wire_api_anthropic_is_recognised() {
-            let toml =
-                "model_provider = \"relay\"\n\n[model_providers.relay]\nwire_api = \"anthropic\"\n";
-            let p = provider(json!({ "config": toml }), None);
-            assert_eq!(
-                of_provider(&AppType::Codex, &p),
-                (Protocol::Anthropic, ProtocolSource::Inferred)
-            );
-        }
-
-        #[test]
-        fn endpoint_suffix_decides_when_there_is_no_explicit_format() {
-            let p = provider(
-                json!({ "env": { "OPENAI_BASE_URL": "https://relay.example.com/v1/responses" } }),
-                None,
-            );
-            assert_eq!(
-                of_provider(&AppType::OpenClaw, &p),
-                (Protocol::OpenAiResponses, ProtocolSource::Inferred)
-            );
-        }
-
-        #[test]
-        fn gemini_endpoint_is_recognised_by_version_segment() {
-            let p = provider(
-                json!({ "env": { "GOOGLE_GEMINI_BASE_URL": "https://gw.example.com/v1beta" } }),
-                None,
-            );
-            assert_eq!(
-                of_provider(&AppType::Agy, &p),
-                (Protocol::Gemini, ProtocolSource::Inferred)
-            );
-        }
-
-        #[test]
-        fn bare_origin_falls_back_to_family() {
-            // 纯 origin 推不出协议，只能按家族
-            let p = provider(
-                json!({ "env": { "ANTHROPIC_BASE_URL": "https://api.anthropic.com" } }),
-                None,
-            );
-            assert_eq!(
-                of_provider(&AppType::Claude, &p),
-                (Protocol::Anthropic, ProtocolSource::Inferred)
-            );
-        }
-
-        #[test]
-        fn codex_without_wire_api_is_flagged_as_guess() {
-            let p = provider(json!({ "env": {} }), None);
-            assert_eq!(
-                of_provider(&AppType::Codex, &p),
-                (Protocol::OpenAiResponses, ProtocolSource::Guessed)
-            );
-        }
-
-        #[test]
-        fn openai_compatible_tools_default_to_chat_and_are_flagged() {
-            let p = provider(json!({ "base_url": "https://relay.example.com" }), None);
-            assert_eq!(
-                of_provider(&AppType::OpenCode, &p),
-                (Protocol::OpenAiChat, ProtocolSource::Guessed)
-            );
-        }
-    }
 }
 
 #[cfg(test)]
@@ -603,13 +445,7 @@ mod tests {
 
     #[test]
     fn auth_style_strings_roundtrip() {
-        let all = [
-            AuthStyle::ApiKey,
-            AuthStyle::CodexOauth,
-            AuthStyle::XaiOauth,
-            AuthStyle::Copilot,
-            AuthStyle::None,
-        ];
+        let all = [AuthStyle::ApiKey, AuthStyle::None];
         for a in all {
             assert_eq!(AuthStyle::from_str_opt(a.as_str()), Some(a));
         }
@@ -695,24 +531,6 @@ mod tests {
         assert_eq!(
             Protocol::from_app_type(&AppType::Claude),
             Protocol::Anthropic
-        );
-        assert_eq!(
-            Protocol::from_app_type(&AppType::ClaudeDesktop),
-            Protocol::Anthropic
-        );
-        assert_eq!(
-            Protocol::from_app_type(&AppType::Codex),
-            Protocol::OpenAiResponses
-        );
-        assert_eq!(
-            Protocol::from_app_type(&AppType::GrokBuild),
-            Protocol::OpenAiResponses
-        );
-        assert_eq!(Protocol::from_app_type(&AppType::Gemini), Protocol::Gemini);
-        assert_eq!(Protocol::from_app_type(&AppType::Agy), Protocol::Gemini);
-        assert_eq!(
-            Protocol::from_app_type(&AppType::OpenCode),
-            Protocol::OpenAiChat
         );
     }
 }

@@ -16,7 +16,7 @@ describe("AppToggleGroup", () => {
       </TooltipProvider>,
     );
 
-    const enabledButton = screen.getByRole("button", { name: "Claude" });
+    const enabledButton = screen.getByRole("button", { name: "API" });
     expect(enabledButton).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(enabledButton);
     expect(onToggle).toHaveBeenCalledWith("claude", false);
@@ -32,7 +32,7 @@ describe("AppToggleGroup", () => {
       </TooltipProvider>,
     );
 
-    const disabledButton = screen.getByRole("button", { name: "Claude" });
+    const disabledButton = screen.getByRole("button", { name: "API" });
     expect(disabledButton).toHaveAttribute("aria-pressed", "false");
     expect(disabledButton).toBeDisabled();
     expect(disabledButton.className).not.toContain("disabled:opacity-");

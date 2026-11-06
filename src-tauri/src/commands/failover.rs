@@ -44,29 +44,6 @@ mod tests {
         assert!(require_failover_app("claude").is_ok());
         assert!(require_failover_app("pi").is_err());
     }
-
-    #[test]
-    fn failover_rejects_codex_official_account_cards() {
-        let db = Database::memory().expect("memory db");
-        let mut official = Provider::with_id(
-            "official-a".to_string(),
-            "OpenAI Official".to_string(),
-            json!({ "auth": {}, "config": "" }),
-            None,
-        );
-        official.category = Some("official".to_string());
-        official.meta = Some(ProviderMeta {
-            auth_binding: Some(AuthBinding {
-                source: AuthBindingSource::ManagedAccount,
-                auth_provider: Some("codex_oauth".to_string()),
-                account_id: Some("account-a".to_string()),
-            }),
-            ..Default::default()
-        });
-        db.save_provider("codex", &official).expect("save official");
-
-        assert!(require_failover_provider(&db, "codex", &official.id).is_err());
-    }
 }
 
 /// 获取故障转移队列

@@ -3,7 +3,7 @@ import { renderWithQueryClient as render } from "../utils/testQueryClient";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   RequestLogTable,
-  appShortName,
+  appDisplayName,
   formatHitPercent,
   formatLogTime,
 } from "@/components/usage/RequestLogTable";
@@ -59,7 +59,6 @@ describe("RequestLogTable", () => {
       <RequestLogTable
         range={initialRange}
         rangeLabel="Today"
-        appType="all"
         refreshIntervalMs={0}
       />,
     );
@@ -79,7 +78,6 @@ describe("RequestLogTable", () => {
       <RequestLogTable
         range={nextRange}
         rangeLabel="Custom"
-        appType="all"
         refreshIntervalMs={0}
       />,
     );
@@ -89,47 +87,6 @@ describe("RequestLogTable", () => {
         expect.objectContaining({
           page: 0,
           range: nextRange,
-        }),
-      );
-    });
-  });
-
-  it("resets pagination when the dashboard app filter changes", async () => {
-    const range: UsageRangeSelection = { preset: "today" };
-    const { rerender } = render(
-      <RequestLogTable
-        range={range}
-        rangeLabel="Today"
-        appType="all"
-        refreshIntervalMs={0}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "usage.nextPage" }));
-
-    await waitFor(() => {
-      expect(useRequestLogsMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          page: 1,
-          range,
-        }),
-      );
-    });
-
-    rerender(
-      <RequestLogTable
-        range={range}
-        rangeLabel="Today"
-        appType="claude"
-        refreshIntervalMs={0}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(useRequestLogsMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          page: 0,
-          range,
         }),
       );
     });
@@ -146,7 +103,7 @@ describe("RequestLogTable", () => {
     );
     const range: UsageRangeSelection = { preset: "today" };
     const table = (
-      <RequestLogTable range={range} appType="all" refreshIntervalMs={0} />
+      <RequestLogTable range={range} refreshIntervalMs={0} />
     );
     const { rerender } = render(table);
 
@@ -161,7 +118,7 @@ describe("RequestLogTable", () => {
     // 「今天」跨日后只剩 5 条：只有一页、翻页条不画，必须自己回到第一页
     total = 5;
     rerender(
-      <RequestLogTable range={range} appType="all" refreshIntervalMs={0} />,
+      <RequestLogTable range={range} refreshIntervalMs={0} />,
     );
     await waitFor(() => {
       expect(useRequestLogsMock).toHaveBeenLastCalledWith(
@@ -185,7 +142,7 @@ describe("RequestLogTable", () => {
     });
     total = 50;
     rerender(
-      <RequestLogTable range={range} appType="all" refreshIntervalMs={0} />,
+      <RequestLogTable range={range} refreshIntervalMs={0} />,
     );
     await waitFor(() => {
       expect(useRequestLogsMock).toHaveBeenLastCalledWith(
@@ -194,7 +151,7 @@ describe("RequestLogTable", () => {
     });
   });
 
-  it("shows exact speed for routed requests and an estimate for timed session logs", () => {
+  it("shows exact speed for routed requests", () => {
     const base = {
       providerId: "p1",
       providerName: "DeepSeek",
@@ -232,42 +189,15 @@ describe("RequestLogTable", () => {
             latencyMs: 2_400,
             firstTokenMs: 1_900,
           },
-          // 会话日志：没有首字，也没估出耗时
+          // 非流式：没有首字，也不算速度
           {
             ...base,
-            requestId: "session",
-            outputTokens: 900,
-            latencyMs: 0,
-            dataSource: "codex_session",
-          },
-          // 会话日志：按估算耗时算，900 token / 10 s = 90 tok/s，带 ≈
-          {
-            ...base,
-            requestId: "session-estimated",
+            requestId: "no-timing",
             outputTokens: 900,
             latencyMs: 10_000,
-            dataSource: "codex_session",
-          },
-          // 会话日志推出了首字：首字带 ≈，速度仍按整段耗时估
-          {
-            ...base,
-            requestId: "session-first-token",
-            outputTokens: 900,
-            latencyMs: 10_000,
-            firstTokenMs: 3_300,
-            dataSource: "codex_session",
-          },
-          // Pi 用自己的请求开始/回复写入时间估算耗时，没有首字计时。
-          {
-            ...base,
-            appType: "pi",
-            requestId: "pi-session-estimated",
-            outputTokens: 900,
-            latencyMs: 10_000,
-            dataSource: "pi_session",
           },
         ],
-        total: 6,
+        total: 3,
         page: 0,
         pageSize: 20,
       },
@@ -284,7 +214,7 @@ describe("RequestLogTable", () => {
     );
 
     const rows = screen.getAllByRole("row").slice(1);
-    expect(rows).toHaveLength(6);
+    expect(rows).toHaveLength(3);
     // 最后两列：速度、首字
     const speedCell = (row: HTMLElement) =>
       row.children[row.children.length - 2];
@@ -297,24 +227,6 @@ describe("RequestLogTable", () => {
     expect(firstTokenCell(rows[1])).toHaveTextContent("1.9s");
     expect(speedCell(rows[2])).toHaveTextContent("—");
     expect(firstTokenCell(rows[2])).toHaveTextContent("—");
-    expect(speedCell(rows[3])).toHaveTextContent("≈90tok/s");
-    expect(speedCell(rows[3])).toHaveAttribute(
-      "title",
-      "usage.estimatedTimingTip",
-    );
-    expect(firstTokenCell(rows[3])).toHaveTextContent("—");
-    expect(speedCell(rows[4])).toHaveTextContent("≈90tok/s");
-    expect(firstTokenCell(rows[4])).toHaveTextContent("≈3.3s");
-    expect(firstTokenCell(rows[4])).toHaveAttribute(
-      "title",
-      "usage.estimatedTimingTipWithFirstToken",
-    );
-    expect(speedCell(rows[5])).toHaveTextContent("≈90tok/s");
-    expect(speedCell(rows[5])).toHaveAttribute(
-      "title",
-      "usage.estimatedTimingTip",
-    );
-    expect(firstTokenCell(rows[5])).toHaveTextContent("—");
     expect(
       screen.getByRole("columnheader", { name: /usage.firstToken/ }),
     ).toBeInTheDocument();
@@ -326,7 +238,7 @@ describe("RequestLogTable", () => {
     expect(onOpenDetail).toHaveBeenCalledWith("short");
   });
 
-  it("shows full provider names on hover and short app names in the app column", () => {
+  it("shows full provider names on hover and protocol names in the app column", () => {
     useRequestLogsMock.mockReturnValue({
       data: {
         data: [
@@ -366,11 +278,10 @@ describe("RequestLogTable", () => {
     expect(
       screen.getByTitle("Kimi For Coding Plan Provider"),
     ).toHaveTextContent("Kimi For Coding Plan Provider");
-    // 应用列：短名 + 全名在悬停提示和读屏文字里
-    const appCell = screen.getByTitle("Claude Code");
-    expect(appCell).toHaveTextContent("Claude");
-    expect(appShortName("claude-desktop")).toBe("Desktop");
-    expect(appShortName("unknown-app")).toBe("unknown-app");
+    // 入口协议列：不再显示具体客户端名称
+    expect(screen.getByTitle("Anthropic")).toHaveTextContent("Anthropic");
+    expect(appDisplayName("claude-desktop")).toBe("Anthropic");
+    expect(appDisplayName("unknown-app")).toBe("unknown-app");
   });
 });
 
@@ -449,7 +360,6 @@ describe("RequestLogTable optional columns", () => {
             cacheCreationTokens: 0,
             cacheReadTokens: 999,
             latencyMs: 4_000,
-            dataSource: "codex_session",
             statusCode: 200,
           },
           // 失败请求：没有输入，也没有耗时
@@ -498,7 +408,7 @@ describe("RequestLogTable optional columns", () => {
     );
     // 999 / 1000 不进成 100%
     expect(codex("usage.logColumns.hitRate")).toHaveTextContent("99.9%");
-    expect(codex("usage.logColumns.duration")).toHaveTextContent("≈4.0s");
+    expect(codex("usage.logColumns.duration")).toHaveTextContent("4.0s");
 
     const failed = cellsOf("failed");
     expect(failed("usage.logColumns.hitRate")).toHaveTextContent("—");

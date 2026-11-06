@@ -11,7 +11,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { isLinux } from "@/lib/platform";
-import { TerminalSelect } from "@/components/settings/TerminalSettings";
 import {
   SettingsBlock,
   SettingsCard,
@@ -152,22 +151,6 @@ export function GeneralSection({ settings, onAutoSave }: GeneralSectionProps) {
         </SettingsCard>
       </SettingsBlock>
 
-      <SettingsBlock title={t("settings.general.updates")}>
-        <SettingsCard>
-          <SettingsSwitchRow
-            label={t("settings.general.checkToolUpdates")}
-            help={{
-              title: t("settings.general.checkToolUpdates"),
-              body: t("settings.general.checkToolUpdatesHelp"),
-            }}
-            checked={settings.checkToolUpdatesOnStartup ?? false}
-            onCheckedChange={(value) =>
-              void onAutoSave({ checkToolUpdatesOnStartup: value })
-            }
-          />
-        </SettingsCard>
-      </SettingsBlock>
-
       <SettingsBlock title={t("settings.general.windowAndTerminal")}>
         <SettingsCard>
           <SettingsSwitchRow
@@ -244,22 +227,6 @@ export function GeneralSection({ settings, onAutoSave }: GeneralSectionProps) {
               }
             />
           )}
-          <SettingsRow
-            label={t("settings.terminal.title")}
-            help={{
-              title: t("settings.terminal.title"),
-              body: t("settings.general.terminalHelp"),
-            }}
-            control={
-              <TerminalSelect
-                className="h-8 w-[160px]"
-                value={settings.preferredTerminal}
-                onChange={(terminal) =>
-                  void onAutoSave({ preferredTerminal: terminal })
-                }
-              />
-            }
-          />
         </SettingsCard>
       </SettingsBlock>
     </>

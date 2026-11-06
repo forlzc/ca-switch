@@ -44,8 +44,6 @@ impl From<Profile> for ProfileDto {
 #[serde(rename_all = "camelCase")]
 pub struct CurrentProfileIds {
     pub claude: Option<String>,
-    pub claude_desktop: Option<String>,
-    pub codex: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -111,14 +109,6 @@ fn list_profiles_blocking(state: &AppState) -> Result<ProfilesResponse, String> 
         claude: state
             .db
             .get_current_profile_id(ProfileScope::Claude.as_str())
-            .map_err(|e| e.to_string())?,
-        claude_desktop: state
-            .db
-            .get_current_profile_id(ProfileScope::ClaudeDesktop.as_str())
-            .map_err(|e| e.to_string())?,
-        codex: state
-            .db
-            .get_current_profile_id(ProfileScope::Codex.as_str())
             .map_err(|e| e.to_string())?,
     };
     Ok(ProfilesResponse {

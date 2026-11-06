@@ -1,14 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  UsageDashboard,
-  resetUsageSyncClockForTests,
-} from "@/components/usage/UsageDashboard";
+import { UsageDashboard } from "@/components/usage/UsageDashboard";
 import type { UsageRangeSelection } from "@/types/usage";
-import { setSettings } from "../msw/state";
 
 const useProviderStatsMock = vi.hoisted(() => vi.fn());
 const useModelStatsMock = vi.hoisted(() => vi.fn());
@@ -18,9 +14,6 @@ const requestLogTableMock = vi.hoisted(() => vi.fn());
 const detailPanelMock = vi.hoisted(() => vi.fn());
 const usageApiMock = vi.hoisted(() => ({
   getUsageSummary: vi.fn(),
-  syncSessionUsage: vi.fn(),
-  getSessionUsageLastSync: vi.fn(),
-  rebuildCodexUsage: vi.fn(),
 }));
 
 vi.mock("react-i18next", () => ({
@@ -167,25 +160,8 @@ const openSettings = async (user: ReturnType<typeof userEvent.setup>) => {
   );
 };
 
-const pickInterval = async (
-  user: ReturnType<typeof userEvent.setup>,
-  label: string,
-) => {
-  // jsdom 没有 scrollIntoView，下拉打开时会调
-  Element.prototype.scrollIntoView = vi.fn();
-  await user.click(
-    await screen.findByRole("combobox", { name: "usage.refreshInterval" }),
-  );
-  await user.click(await screen.findByRole("option", { name: label }));
-};
-
-// 页头同步按钮：文字是上次同步的时间（没同步过时是「立即同步」）
-const syncButton = () =>
-  screen.getByRole("button", { name: /^usage\.(syncStatus|sessionSync)\./ });
-
 describe("UsageDashboard", () => {
   beforeEach(() => {
-    resetUsageSyncClockForTests();
     useProviderStatsMock.mockReset();
     useModelStatsMock.mockReset();
     useSummaryByAppMock.mockReset();
@@ -209,15 +185,6 @@ describe("UsageDashboard", () => {
     useModelStatsMock.mockReturnValue({ data: [] });
     useSummaryByAppMock.mockReturnValue({ data: [] });
     usageApiMock.getUsageSummary.mockResolvedValue({ totalRequests: 5 });
-    usageApiMock.getSessionUsageLastSync.mockReset().mockResolvedValue(null);
-    usageApiMock.syncSessionUsage.mockResolvedValue({
-      imported: 2,
-      skipped: 0,
-      filesScanned: 3,
-      suspectedDuplicates: 0,
-      deferredFiles: 0,
-      errors: [],
-    });
   });
 
   it("swaps the trend chart for the heatmap on the all-time range", async () => {
@@ -279,26 +246,6 @@ describe("UsageDashboard", () => {
     );
   });
 
-  it("shows the saved refresh interval in the settings drawer", async () => {
-    const user = userEvent.setup();
-    renderDashboard({ refreshIntervalMs: 5000 });
-
-    await openSettings(user);
-    expect(
-      await screen.findByRole("combobox", { name: "usage.refreshInterval" }),
-    ).toHaveTextContent("usage.refreshMenu.label:5");
-  });
-
-  it("treats a legacy 'off' interval as the 60 second default", async () => {
-    const user = userEvent.setup();
-    renderDashboard({ refreshIntervalMs: 0 });
-
-    await openSettings(user);
-    expect(
-      await screen.findByRole("combobox", { name: "usage.refreshInterval" }),
-    ).toHaveTextContent("usage.refreshMenu.label:60");
-  });
-
   it("defaults to today", () => {
     renderDashboard();
 
@@ -311,106 +258,6 @@ describe("UsageDashboard", () => {
     expect(usageHeroMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ range: { preset: "today" } }),
     );
-  });
-
-  it("filters usage queries to an app from its icon chip", async () => {
-    const user = userEvent.setup();
-    renderDashboard();
-
-    await user.click(screen.getByRole("button", { name: "Pi" }));
-
-    await waitFor(() =>
-      expect(useProviderStatsMock).toHaveBeenLastCalledWith(
-        expect.anything(),
-        { appType: "pi" },
-        expect.anything(),
-      ),
-    );
-    expect(useModelStatsMock).toHaveBeenLastCalledWith(
-      expect.anything(),
-      { appType: "pi", providerName: undefined },
-      expect.anything(),
-    );
-    expect(usageHeroMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ appType: "pi" }),
-    );
-    // 芯片只有图标，名字由 aria-label 提供
-    expect(
-      screen.getByRole("button", { name: "Pi", pressed: true }),
-    ).toBeInTheDocument();
-  });
-
-  it("filters to Oh My Pi separately from Pi", async () => {
-    const user = userEvent.setup();
-    renderDashboard();
-
-    // Two products, two filters: the chip must query appType "omp" and must
-    // not be confused with Pi's.
-    await user.click(screen.getByRole("button", { name: "Oh My Pi" }));
-
-    await waitFor(() =>
-      expect(useProviderStatsMock).toHaveBeenLastCalledWith(
-        expect.anything(),
-        { appType: "omp" },
-        expect.anything(),
-      ),
-    );
-    expect(usageHeroMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ appType: "omp" }),
-    );
-    expect(screen.getByRole("button", { name: "Pi" })).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Oh My Pi", pressed: true }),
-    ).toBeInTheDocument();
-  });
-
-  it("starts with the app filter passed in from an app page", () => {
-    renderDashboard({ initialAppType: "codex" });
-
-    expect(
-      screen.getByRole("button", { name: /Codex/, pressed: true }),
-    ).toBeInTheDocument();
-    expect(usageHeroMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ appType: "codex" }),
-    );
-  });
-
-  it("lists only the apps shown on the Apps page, keeping the selected one", async () => {
-    setSettings({
-      visibleApps: {
-        claude: false,
-        "claude-desktop": true,
-        codex: true,
-        gemini: false,
-        grokbuild: false,
-        opencode: false,
-        openclaw: true,
-        hermes: true,
-        pi: false,
-        mcode: false,
-        kimi: false,
-        agy: false,
-        omp: false,
-      },
-    });
-    renderDashboard({ initialAppType: "gemini" });
-
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("button", { name: "Pi" }),
-      ).not.toBeInTheDocument(),
-    );
-    // Claude Desktop 显示时 Claude Code 的用量也列；选中的 Gemini 虽被隐藏也留着
-    expect(
-      screen.getByRole("button", { name: "Claude Code" }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Codex/ })).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /Gemini/, pressed: true }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /Grok/ }),
-    ).not.toBeInTheDocument();
   });
 
   const scopeTrigger = () =>
@@ -466,123 +313,6 @@ describe("UsageDashboard", () => {
       ),
     );
     expect(scopeTrigger()).toHaveTextContent("DeepSeek / deepseek-chat");
-  });
-
-  it("persists refresh interval changes", async () => {
-    const user = userEvent.setup();
-    const onRefreshIntervalChange = vi.fn().mockResolvedValue(true);
-    renderDashboard({ onRefreshIntervalChange });
-
-    await openSettings(user);
-    await pickInterval(user, "usage.refreshMenu.label:5");
-
-    await waitFor(() =>
-      expect(onRefreshIntervalChange).toHaveBeenCalledWith(5000),
-    );
-    expect(
-      screen.getByRole("combobox", { name: "usage.refreshInterval" }),
-    ).toHaveTextContent("usage.refreshMenu.label:5");
-  });
-
-  it("rolls back optimistic interval changes when persistence fails", async () => {
-    const user = userEvent.setup();
-    const onRefreshIntervalChange = vi.fn().mockResolvedValue(false);
-    renderDashboard({ onRefreshIntervalChange });
-
-    await openSettings(user);
-    await pickInterval(user, "usage.refreshMenu.label:5");
-
-    await waitFor(() =>
-      expect(onRefreshIntervalChange).toHaveBeenCalledWith(5000),
-    );
-    await waitFor(() =>
-      expect(
-        screen.getByRole("combobox", { name: "usage.refreshInterval" }),
-      ).toHaveTextContent("usage.refreshMenu.label:60"),
-    );
-  });
-
-  it("syncs session logs from the header and shows when it last synced", async () => {
-    const user = userEvent.setup();
-    renderDashboard();
-
-    // 还没同步过时按钮写「立即同步」
-    expect(syncButton()).toHaveTextContent("usage.sessionSync.syncNow");
-    // 打开页面会先自动扫一次，等它结束后再手动同步
-    await waitFor(() =>
-      expect(usageApiMock.syncSessionUsage).toHaveBeenCalledTimes(1),
-    );
-    await user.click(syncButton());
-
-    await waitFor(() =>
-      expect(usageApiMock.syncSessionUsage).toHaveBeenCalledTimes(2),
-    );
-    await waitFor(() =>
-      expect(syncButton()).toHaveTextContent("usage.syncStatus.justNow"),
-    );
-  });
-
-  it("shows when the background scan last finished", async () => {
-    usageApiMock.getSessionUsageLastSync.mockResolvedValue(
-      Date.now() - 5 * 60_000 - 1_000,
-    );
-    renderDashboard();
-
-    await waitFor(() =>
-      expect(syncButton()).toHaveTextContent("usage.syncStatus.minutesAgo:5"),
-    );
-  });
-
-  it("prefers a manual sync that is newer than the last background scan", async () => {
-    const user = userEvent.setup();
-    usageApiMock.getSessionUsageLastSync.mockResolvedValue(
-      Date.now() - 30 * 60_000,
-    );
-    renderDashboard();
-    await waitFor(() =>
-      expect(syncButton()).toHaveTextContent("usage.syncStatus.minutesAgo:30"),
-    );
-
-    await user.click(syncButton());
-
-    await waitFor(() =>
-      expect(syncButton()).toHaveTextContent("usage.syncStatus.justNow"),
-    );
-  });
-
-  it("does not scan until settings load, and never once they say scanning is off", async () => {
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    const view = render(
-      <QueryClientProvider client={client}>
-        <UsageDashboard settingsReady={false} />
-      </QueryClientProvider>,
-    );
-    await act(async () => {});
-    expect(usageApiMock.syncSessionUsage).not.toHaveBeenCalled();
-    view.rerender(
-      <QueryClientProvider client={client}>
-        <UsageDashboard settingsReady sessionAutoSyncEnabled={false} />
-      </QueryClientProvider>,
-    );
-    await act(async () => {});
-    expect(usageApiMock.syncSessionUsage).not.toHaveBeenCalled();
-  });
-
-  it("keeps the sync button about sync time when scanning is off, and hides the scan interval", async () => {
-    const user = userEvent.setup();
-    renderDashboard({ sessionAutoSyncEnabled: false });
-
-    // 自动扫描开没开不写在同步按钮上
-    expect(syncButton()).toHaveTextContent("usage.sessionSync.syncNow");
-    expect(syncButton()).not.toHaveTextContent(/usage\.syncStatus\.off/);
-    await openSettings(user);
-    await screen.findByRole("switch", { name: "usage.sources.scanTitle" });
-    expect(
-      screen.queryByRole("combobox", { name: "usage.refreshInterval" }),
-    ).not.toBeInTheDocument();
-    expect(usageApiMock.syncSessionUsage).not.toHaveBeenCalled();
   });
 
   it("opens the request detail drawer from a log row", async () => {
@@ -712,18 +442,12 @@ describe("UsageDashboard", () => {
     expect(logsTab).toHaveFocus();
   });
 
-  it("toggles session scanning and links to routing settings from the settings drawer", async () => {
+  it("links to routing settings from the settings drawer", async () => {
     const user = userEvent.setup();
-    const onSessionAutoSyncEnabledChange = vi.fn();
     const onOpenRoutingSettings = vi.fn();
-    renderDashboard({ onSessionAutoSyncEnabledChange, onOpenRoutingSettings });
+    renderDashboard({ onOpenRoutingSettings });
 
     await openSettings(user);
-    await user.click(
-      await screen.findByRole("switch", { name: "usage.sources.scanTitle" }),
-    );
-    expect(onSessionAutoSyncEnabledChange).toHaveBeenCalledWith(false);
-
     await user.click(
       screen.getByRole("button", { name: /usage.sources.editLogging/ }),
     );

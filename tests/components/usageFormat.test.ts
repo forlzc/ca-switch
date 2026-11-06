@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  SPEED_ESTIMATE_MIN_OUTPUT_TOKENS,
   SPEED_MIN_OUTPUT_TOKENS,
-  formatEstimatedTokensPerSecond,
   formatFirstTokenSeconds,
   formatMoney,
   formatMoneyCompact,
@@ -19,7 +17,6 @@ import {
   shouldRefreshRates,
   resolveSidebarToday,
   getAggregateTokensPerSecond,
-  getEstimatedTokensPerSecond,
   getOutputTokensPerSecond,
   getLocaleFromLanguage,
   sumSpeedTotals,
@@ -148,71 +145,12 @@ describe("usage format helpers", () => {
     expect(formatTokensPerSecond(null)).toBeNull();
   });
 
-  it("estimates speed for session-log requests from the whole duration", () => {
-    expect(SPEED_ESTIMATE_MIN_OUTPUT_TOKENS).toBe(200);
-    const session = {
-      outputTokens: 1_800,
-      latencyMs: 20_000,
-      dataSource: "session_log",
-    };
-    // 1800 token / 20 s，等首字的时间也算在内
-    expect(getEstimatedTokensPerSecond(session)).toBe(90);
-    expect(formatEstimatedTokensPerSecond(session)).toBe("90");
-    // 估算的不算精确速度
-    expect(getOutputTokensPerSecond(session)).toBeNull();
-    expect(
-      getEstimatedTokensPerSecond({ ...session, dataSource: "codex_session" }),
-    ).toBe(90);
-    expect(
-      getEstimatedTokensPerSecond({
-        ...session,
-        dataSource: "kimi_session",
-        firstTokenMs: 4_000,
-      }),
-    ).toBe(90);
-    // 推出了首字的会话日志：仍按整段耗时估，不当成精确速度
-    const withFirstToken = { ...session, firstTokenMs: 4_000 };
-    expect(getEstimatedTokensPerSecond(withFirstToken)).toBe(90);
-    expect(getOutputTokensPerSecond(withFirstToken)).toBeNull();
-    expect(sumSpeedTotals([withFirstToken])).toEqual({
-      outputTokens: 0,
-      generationMs: 0,
-    });
-  });
-
   it("formats first-token time in seconds", () => {
     expect(formatFirstTokenSeconds(2_640)).toBe("2.6s");
     expect(formatFirstTokenSeconds(0)).toBe("0.0s");
     expect(formatFirstTokenSeconds(null)).toBeNull();
     expect(formatFirstTokenSeconds(undefined)).toBeNull();
     expect(formatFirstTokenSeconds(-1)).toBeNull();
-  });
-
-  it("does not estimate speed for routed, short, or untimed requests", () => {
-    const session = {
-      outputTokens: 1_800,
-      latencyMs: 20_000,
-      dataSource: "session_log",
-    };
-    // 路由服务的请求：非流式没有首字，也不估
-    expect(
-      getEstimatedTokensPerSecond({ ...session, dataSource: "proxy" }),
-    ).toBeNull();
-    expect(
-      getEstimatedTokensPerSecond({ ...session, dataSource: undefined }),
-    ).toBeNull();
-    // 输出不到 200
-    expect(
-      getEstimatedTokensPerSecond({ ...session, outputTokens: 199 }),
-    ).toBeNull();
-    // 没估出耗时
-    expect(
-      getEstimatedTokensPerSecond({ ...session, latencyMs: 0 }),
-    ).toBeNull();
-    // 耗时不到 1 秒
-    expect(
-      getEstimatedTokensPerSecond({ ...session, latencyMs: 999 }),
-    ).toBeNull();
   });
 
   it("aggregates speed as total output over total generation time, not a mean of rates", () => {

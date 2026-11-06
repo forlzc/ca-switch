@@ -11,8 +11,6 @@ import { useTranslation } from "react-i18next";
 import { useRequestLogs } from "@/lib/query/usage";
 import { TablePagination } from "./TablePagination";
 import { HelpTip } from "@/components/ui/help-tip";
-import { AppGlyph, APP_DISPLAY_NAME } from "@/components/shell/AppGlyph";
-import type { AppId } from "@/lib/api";
 import {
   CACHE_INCLUSIVE_APP_TYPES,
   getFreshInputTokens,
@@ -24,12 +22,10 @@ import {
 import { cn } from "@/lib/utils";
 import {
   fmtInt,
-  formatEstimatedTokensPerSecond,
   formatFirstTokenSeconds,
   formatOutputTokensPerSecond,
   formatTokensCompact,
   getLocaleFromLanguage,
-  isSessionLogRequest,
   parseFiniteNumber,
 } from "./format";
 import {
@@ -52,7 +48,6 @@ interface RequestLogTableProps {
   range: UsageRangeSelection;
   /** 旧接口保留；时间范围由页面顶部的筛选统一控制 */
   rangeLabel?: string;
-  appType?: string;
   providerName?: string;
   model?: string;
   /** 状态码筛选（页签行右侧的下拉） */
@@ -98,37 +93,29 @@ export function formatLogFullTime(createdAt: number): string {
   )}`;
 }
 
-export function isKnownAppId(appType: string): appType is AppId {
-  return appType in APP_DISPLAY_NAME;
-}
-
-export function appDisplayName(appType: string): string {
-  return isKnownAppId(appType) ? APP_DISPLAY_NAME[appType] : appType;
-}
-
 /**
- * 请求日志「应用」列用的短名：图标已经区分了品牌（Claude Code / Desktop 靠角标），
- * 列里只留最短能认出的名字，把宽度让给供应商列。全名在悬停提示里。
+ * 入口协议名：日志里存的是历史入口标识，显示时归一到它对应的协议，
+ * 不再出现任何具体客户端名称。
  */
-const APP_SHORT_NAME: Record<AppId, string> = {
-  claude: "Claude",
-  "claude-desktop": "Desktop",
-  codex: "Codex",
+const APP_PROTOCOL_NAME: Record<string, string> = {
+  claude: "Anthropic",
+  "claude-desktop": "Anthropic",
+  codex: "OpenAI Responses",
+  grokbuild: "OpenAI Chat",
   gemini: "Gemini",
-  grokbuild: "Grok",
-  opencode: "OpenCode",
-  openclaw: "OpenClaw",
-  hermes: "Hermes",
-  pi: "Pi",
-  mcode: "MiniMax",
-  kimi: "Kimi",
-  dsh: "DSH",
-  agy: "Antigravity",
-  omp: "omp",
+  opencode: "OpenAI Chat",
+  openclaw: "OpenAI Chat",
+  hermes: "OpenAI Chat",
+  pi: "OpenAI Chat",
+  omp: "OpenAI Chat",
+  mcode: "OpenAI Chat",
+  kimi: "OpenAI Chat",
+  dsh: "OpenAI Chat",
+  agy: "Anthropic",
 };
 
-export function appShortName(appType: string): string {
-  return isKnownAppId(appType) ? APP_SHORT_NAME[appType] : appType;
+export function appDisplayName(appType: string): string {
+  return APP_PROTOCOL_NAME[appType] ?? appType;
 }
 
 const isSuccessStatus = (code: number) => code >= 200 && code < 300;
@@ -179,7 +166,6 @@ function StatusBadge({
 
 export function RequestLogTable({
   range,
-  appType: dashboardAppType,
   providerName,
   model,
   statusCode,
@@ -195,10 +181,6 @@ export function RequestLogTable({
   const [page, setPage] = useState(0);
 
   const effectiveFilters: LogFilters = {
-    appType:
-      dashboardAppType && dashboardAppType !== "all"
-        ? dashboardAppType
-        : undefined,
     providerName,
     model,
     statusCode,
@@ -241,7 +223,6 @@ export function RequestLogTable({
   const view = JSON.stringify([
     page,
     pageSize,
-    dashboardAppType,
     providerName,
     model,
     statusCode,
@@ -318,7 +299,6 @@ export function RequestLogTable({
   useEffect(() => {
     setPage(0);
   }, [
-    dashboardAppType,
     providerName,
     model,
     statusCode,
@@ -374,16 +354,10 @@ export function RequestLogTable({
     const fullTime = formatLogFullTime(log.createdAt);
     const providerLabel = getUsageProviderLabel(log.providerName, t);
     const provider = providerLabel.shortLabel;
-    const exactTps = formatOutputTokensPerSecond(log);
-    // 会话日志导入的请求没有首字计时，速度是按日志时间戳估的，前面带 ≈
-    const estimatedTps =
-      exactTps == null ? formatEstimatedTokensPerSecond(log) : null;
-    const tps = exactTps ?? estimatedTps;
+    const tps = formatOutputTokensPerSecond(log);
     const latency = parseFiniteNumber(log.latencyMs);
     const firstToken = parseFiniteNumber(log.firstTokenMs);
     const firstTokenText = formatFirstTokenSeconds(firstToken);
-    // 会话日志的耗时和首字都是按时间戳估的，带 ≈
-    const isSession = isSessionLogRequest(log);
     const timing =
       latency != null && latency > 0
         ? {
@@ -392,17 +366,9 @@ export function RequestLogTable({
           }
         : null;
     const timingTip =
-      timing == null
+      timing == null || timing.ttft == null
         ? undefined
-        : !isSession
-          ? timing.ttft != null
-            ? t("usage.timingTip", timing)
-            : undefined
-          : timing.ttft != null
-            ? t("usage.estimatedTimingTipWithFirstToken", timing)
-            : estimatedTps != null
-              ? t("usage.estimatedTimingTip", timing)
-              : undefined;
+        : t("usage.timingTip", timing);
     const multiplier = parseFiniteNumber(log.costMultiplier);
     const modelTitle =
       log.requestModel && log.requestModel !== log.model
@@ -447,19 +413,8 @@ export function RequestLogTable({
       ),
       app: (
         <td className={cn(usageTable.td, "w-px")}>
-          <span
-            className="flex items-center gap-1.5"
-            title={appDisplayName(log.appType)}
-          >
-            {isKnownAppId(log.appType) && (
-              <AppGlyph
-                app={log.appType}
-                size={14}
-                badgeClassName="bg-surface"
-              />
-            )}
-            <span aria-hidden="true">{appShortName(log.appType)}</span>
-            <span className="sr-only">{appDisplayName(log.appType)}</span>
+          <span title={appDisplayName(log.appType)}>
+            {appDisplayName(log.appType)}
           </span>
         </td>
       ),
@@ -565,7 +520,6 @@ export function RequestLogTable({
             "—"
           ) : (
             <>
-              {estimatedTps != null && "≈"}
               {tps}
               <span className="ms-0.5 text-badge font-normal text-fg-3">
                 tok/s
@@ -582,20 +536,15 @@ export function RequestLogTable({
           )}
           title={timingTip}
         >
-          {isSession && firstTokenText != null && "≈"}
           {firstTokenText ?? "—"}
         </td>
       ),
       duration: (
         <td
           className={cn(usageTable.td, timing == null && usageTable.muted)}
-          title={
-            timing == null
-              ? undefined
-              : `${isSession ? "≈" : ""}${fmtInt(latency, locale)} ms`
-          }
+          title={timing == null ? undefined : `${fmtInt(latency, locale)} ms`}
         >
-          {timing == null ? "—" : `${isSession ? "≈" : ""}${timing.duration}s`}
+          {timing == null ? "—" : `${timing.duration}s`}
         </td>
       ),
       statusCode: (

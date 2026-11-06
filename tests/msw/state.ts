@@ -8,13 +8,11 @@ import type {
 } from "@/types";
 import { deepClone } from "@/utils/deepClone";
 
-type ProvidersByApp = Record<AppId, Record<string, Provider>>;
-type CurrentProviderState = Record<AppId, string>;
-type McpConfigState = Record<AppId, Record<string, McpServer>>;
-type LiveProviderIdsByApp = Record<
-  "opencode" | "openclaw" | "hermes",
-  string[]
->;
+// 测试夹具保留旧的多应用键，便于复用既有 mock 断言。
+type ProvidersByApp = Record<string, Record<string, Provider>>;
+type CurrentProviderState = Record<string, string>;
+type McpConfigState = Record<string, Record<string, McpServer>>;
+type LiveProviderIdsByApp = Record<string, string[]>;
 
 const createDefaultProviders = (): ProvidersByApp => ({
   claude: {
@@ -108,9 +106,6 @@ let liveProviderIds: LiveProviderIdsByApp = {
 let settingsState: Settings = {
   showInTray: true,
   minimizeToTrayOnClose: true,
-  enableClaudePluginIntegration: false,
-  claudeConfigDir: "/default/claude",
-  codexConfigDir: "/default/codex",
   language: "zh",
 };
 let appConfigDirOverride: string | null = null;
@@ -289,9 +284,6 @@ export const resetProviderState = () => {
   settingsState = {
     showInTray: true,
     minimizeToTrayOnClose: true,
-    enableClaudePluginIntegration: false,
-    claudeConfigDir: "/default/claude",
-    codexConfigDir: "/default/codex",
     language: "zh",
   };
   appConfigDirOverride = null;
