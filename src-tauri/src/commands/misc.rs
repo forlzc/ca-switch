@@ -79,7 +79,7 @@ pub async fn check_for_updates(handle: AppHandle) -> Result<bool, String> {
     handle
         .opener()
         .open_url(
-            "https://github.com/forlzc/cc-switch/releases/latest",
+            "https://github.com/forlzc/ca-switch/releases/latest",
             None::<String>,
         )
         .map_err(|e| format!("打开更新页面失败: {e}"))?;
@@ -100,7 +100,7 @@ fn portable_zip_url(version: &str, arm64: bool) -> Option<String> {
     }
     let suffix = if arm64 { "-arm64" } else { "" };
     Some(format!(
-        "https://github.com/forlzc/cc-switch/releases/download/v{version}/CC-Switch-v{version}-Windows{suffix}-Portable.zip"
+        "https://github.com/forlzc/ca-switch/releases/download/v{version}/CC-Switch-v{version}-Windows{suffix}-Portable.zip"
     ))
 }
 
@@ -112,7 +112,7 @@ pub async fn open_portable_update_download(
     version: String,
 ) -> Result<bool, String> {
     let url = portable_zip_url(&version, cfg!(target_arch = "aarch64"))
-        .unwrap_or_else(|| "https://github.com/forlzc/cc-switch/releases/latest".to_string());
+        .unwrap_or_else(|| "https://github.com/forlzc/ca-switch/releases/latest".to_string());
     handle
         .opener()
         .open_url(url, None::<String>)

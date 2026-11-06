@@ -4,7 +4,7 @@ version = "4.0.25"
 description = "Switch between providers for Claude Code"
 authors = ["Jason Young"]
 license = "MIT"
-repository = "https://github.com/forlzc/cc-switch"
+repository = "https://github.com/forlzc/ca-switch"
 edition = "2021"
 rust-version = "1.85.0"
 

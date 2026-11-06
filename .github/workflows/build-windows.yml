@@ -131,7 +131,7 @@ jobs:
           $exe = Get-ChildItem src-tauri/target/release/*.exe | Select-Object -First 1
           if ($null -eq $exe) { throw '未找到便携 exe，无法打包' }
           $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
-          $dest = "CC-Switch-$version-Windows-Portable.zip"
+          $dest = "CC-Switch-v$version-Windows-Portable.zip"
           Compress-Archive -Path $exe.FullName -DestinationPath $dest -Force
           Write-Host ("Portable zip: {0}  ({1:N1} MB)" -f $dest, ((Get-Item $dest).Length / 1MB))
 

@@ -1,7 +1,7 @@
 # caswitch 精简重构：进度与收尾记录
 
 > 更新时间：2026-11-06（GMT+8）
-> 仓库：`/workspace/cc-switch`　远端：`https://github.com/forlzc/cc-switch.git`
+> 仓库：`/workspace/cc-switch`　远端：`https://github.com/forlzc/ca-switch.git`
 > 分支：`ca-switch`
 > 最终口径：**单 API 入口、无任何具体客户端功能、通用图标**
 > 工作区：收尾完成后干净

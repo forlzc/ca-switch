@@ -36,4 +36,4 @@ CA Switch 基于 [farion1231/cc-switch](https://github.com/farion1231/cc-switch)
 感谢原作者及所有贡献者的工作。
 
 本分支由 [forlzc](https://github.com/forlzc) 维护，仓库地址：
-[forlzc/cc-switch](https://github.com/forlzc/cc-switch)。
+[forlzc/ca-switch](https://github.com/forlzc/ca-switch)。

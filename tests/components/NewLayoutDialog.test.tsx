@@ -80,7 +80,7 @@ describe("NewLayoutDialog", () => {
     );
     await waitFor(() =>
       expect(mocks.openExternal).toHaveBeenCalledWith(
-        "https://github.com/forlzc/cc-switch/releases/tag/v4.0.0",
+        "https://github.com/forlzc/ca-switch/releases/tag/v4.0.0",
       ),
     );
     await waitFor(() =>

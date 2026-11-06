@@ -104,13 +104,13 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
 
       if (!displayVersion) {
         await settingsApi.openExternal(
-          "https://github.com/farion1231/cc-switch/releases",
+          "https://github.com/forlzc/ca-switch/releases",
         );
         return;
       }
 
       await settingsApi.openExternal(
-        `https://github.com/farion1231/cc-switch/releases/tag/${displayVersion}`,
+        `https://github.com/forlzc/ca-switch/releases/tag/${displayVersion}`,
       );
     } catch (error) {
       console.error("[AboutSection] Failed to open release notes", error);
@@ -123,7 +123,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
   }, []);
 
   const handleOpenFork = useCallback(() => {
-    void settingsApi.openExternal("https://github.com/forlzc/cc-switch");
+    void settingsApi.openExternal("https://github.com/forlzc/ca-switch");
   }, []);
 
   const handleDismissStarPrompt = useCallback(() => {
