@@ -589,4 +589,527 @@ mod tests {
         }
         proxy.stop().await.unwrap();
     }
+
+    /// 真实上游协议转换验收（默认跳过，避免 CI 花钱）。
+    ///
+    /// ```bash
+    /// E2E_UPSTREAM_API_KEY=... \
+    /// E2E_UPSTREAM_BASE_URL=https://bailucode.com/openapi/v1 \
+    /// E2E_UPSTREAM_MODEL=bailu-2.7 \
+    /// cargo test --lib real_upstream_protocol_matrix -- --ignored --nocapture
+    /// ```
+    ///
+    /// 覆盖：同一入口下 Anthropic / OpenAI Chat / OpenAI Responses 三种上游；
+    /// 以及入口协议与上游协议不一致时的转换和明确返回 501 的格子。
+    #[tokio::test]
+    #[ignore = "需要真实上游 API Key，手动运行"]
+    async fn real_upstream_protocol_matrix() {
+        // 应用启动时会安装 rustls provider；单测进程没有 Tauri 启动流程，需手动安装。
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let Ok(api_key) = std::env::var("E2E_UPSTREAM_API_KEY") else {
+            eprintln!("跳过：未设置 E2E_UPSTREAM_API_KEY");
+            return;
+        };
+        let base_url = std::env::var("E2E_UPSTREAM_BASE_URL")
+            .unwrap_or_else(|_| "https://bailucode.com/openapi/v1".to_string());
+        let model = std::env::var("E2E_UPSTREAM_MODEL")
+            .unwrap_or_else(|_| "bailu-2.7".to_string());
+        // 沙箱/CI 里直连外网可能被拦，显式给上游客户端配一个出口代理。
+        if let Ok(proxy) = std::env::var("E2E_UPSTREAM_PROXY") {
+            crate::proxy::http_client::apply_proxy(Some(&proxy))
+                .expect("apply upstream proxy");
+        }
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .unwrap();
+
+        for (upstream, cells) in [
+            (
+                "anthropic",
+                vec![("anthropic", 200), ("openai_responses", 200), ("openai_chat", 200)],
+            ),
+            (
+                "openai_responses",
+                vec![("anthropic", 200), ("openai_responses", 200), ("openai_chat", 200)],
+            ),
+            (
+                "openai_chat",
+                vec![("anthropic", 200), ("openai_responses", 200), ("openai_chat", 200)],
+            ),
+        ] {
+            let db = Arc::new(Database::memory().expect("memory database"));
+            let mut provider = Provider::with_id(
+                format!("real-{upstream}"),
+                format!("Real upstream ({upstream})"),
+                json!({
+                    "env": {
+                        "ANTHROPIC_BASE_URL": base_url.clone(),
+                        "ANTHROPIC_AUTH_TOKEN": api_key.clone(),
+                    },
+                }),
+                None,
+            );
+            // 协议由 meta.apiFormat 落库（与生产路径一致），
+            // 不能只写 settings_config，否则推断会退化成家族默认的 Anthropic。
+            provider.meta = Some(ProviderMeta {
+                api_format: Some(upstream.to_string()),
+                ..ProviderMeta::default()
+            });
+            db.save_provider("claude", &provider).expect("save provider");
+            db.set_current_provider("claude", &provider.id).expect("set current");
+
+            let proxy = ProxyServer::new(
+                ProxyConfig {
+                    listen_port: 0,
+                    enable_logging: false,
+                    non_streaming_timeout: 120,
+                    ..ProxyConfig::default()
+                },
+                db,
+                None,
+            );
+            let info = proxy.start().await.expect("start proxy");
+            let proxy_url = format!("http://127.0.0.1:{}", info.port);
+
+            let build_request = |inbound: &str, stream: bool| -> (&'static str, Value) {
+                match inbound {
+                    "anthropic" => (
+                        "/v1/messages",
+                        json!({
+                            "model": model.clone(),
+                            "max_tokens": 128,
+                            "stream": stream,
+                            "messages": [{"role": "user", "content": "只回复 OK"}],
+                        }),
+                    ),
+                    "openai_chat" => (
+                        "/v1/chat/completions",
+                        json!({
+                            "model": model.clone(),
+                            "max_tokens": 128,
+                            "stream": stream,
+                            "messages": [{"role": "user", "content": "只回复 OK"}],
+                        }),
+                    ),
+                    _ => (
+                        "/v1/responses",
+                        json!({
+                            "model": model.clone(),
+                            "input": "只回复 OK",
+                            "max_output_tokens": 128,
+                            "stream": stream,
+                        }),
+                    ),
+                }
+            };
+
+            // 非流式验证响应形状；流式验证 SSE 事件也是入口协议的形状。
+            for stream in [false, true] {
+                for (inbound, expected) in &cells {
+                    let expected = *expected as u16;
+                    let (path, body) = build_request(inbound, stream);
+                    let response = client
+                        .post(format!("{proxy_url}{path}"))
+                        .header("x-api-key", "client-placeholder")
+                        .header("anthropic-version", "2023-06-01")
+                        .json(&body)
+                        .send()
+                        .await
+                        .expect("real upstream request");
+                    let status = response.status().as_u16();
+                    let text = response.text().await.unwrap_or_default();
+                    let snippet: String = text.chars().take(160).collect();
+                    println!("[{upstream}] {inbound} (stream={stream}) -> {status}: {snippet}");
+                    if status != expected {
+                        println!("[{upstream}] {inbound} 完整响应: {text}");
+                    }
+                    assert_eq!(status, expected, "[{upstream}] {inbound} 状态码异常");
+                    if expected != 200 {
+                        continue;
+                    }
+                    assert!(
+                        text.contains("OK"),
+                        "[{upstream}] {inbound} 响应未包含 OK: {text}"
+                    );
+                    if stream {
+                        // 流式：事件名必须属于入口协议。
+                        let marker_ok = match *inbound {
+                            "anthropic" => {
+                                text.contains("message_start")
+                                    || text.contains("content_block_delta")
+                                    || text.contains("\"type\":\"message\"")
+                            }
+                            "openai_chat" => {
+                                text.contains("chat.completion.chunk")
+                                    || text.contains("[DONE]")
+                                    || text.contains("\"object\":\"chat.completion\"")
+                            }
+                            _ => {
+                                text.contains("response.created")
+                                    || text.contains("response.completed")
+                                    || text.contains("response.output_text.delta")
+                                    || text.contains("\"object\":\"response\"")
+                            }
+                        };
+                        assert!(
+                            marker_ok,
+                            "[{upstream}] {inbound} 流式事件不是 {inbound} 协议: {text}"
+                        );
+                    } else {
+                        // 只校验状态码会把「透传了错误协议的响应体」也算通过：
+                        // 入口是什么协议，回来的响应必须也是那个形状。
+                        let parsed: Value = serde_json::from_str(&text).unwrap_or_else(|e| {
+                            panic!("[{upstream}] {inbound} 响应不是 JSON: {e}; body={text}")
+                        });
+                        let shape_ok = match *inbound {
+                            "anthropic" => parsed["type"].as_str() == Some("message"),
+                            "openai_chat" => {
+                                parsed["object"].as_str() == Some("chat.completion")
+                                    || parsed["object"].as_str() == Some("chat.completion.chunk")
+                            }
+                            _ => parsed["object"].as_str() == Some("response"),
+                        };
+                        assert!(
+                            shape_ok,
+                            "[{upstream}] {inbound} 响应形状不是 {inbound} 协议: {text}"
+                        );
+                    }
+                }
+            }
+
+            proxy.stop().await.expect("stop proxy");
+        }
+    }
+
+    /// 起一个指向真实上游的本地代理，`api_format` 决定上游协议。
+    ///
+    /// 与 `real_upstream_protocol_matrix` 共用同一套落库方式：协议写在
+    /// `meta.apiFormat`，与生产路径一致。
+    async fn start_real_upstream_proxy(
+        api_format: &str,
+        base_url: &str,
+        api_key: &str,
+    ) -> (ProxyServer, String) {
+        let db = Arc::new(Database::memory().expect("memory database"));
+        let mut provider = Provider::with_id(
+            format!("real-{api_format}"),
+            format!("Real upstream ({api_format})"),
+            json!({
+                "env": {
+                    "ANTHROPIC_BASE_URL": base_url,
+                    "ANTHROPIC_AUTH_TOKEN": api_key,
+                },
+            }),
+            None,
+        );
+        provider.meta = Some(ProviderMeta {
+            api_format: Some(api_format.to_string()),
+            ..ProviderMeta::default()
+        });
+        db.save_provider("claude", &provider).expect("save provider");
+        db.set_current_provider("claude", &provider.id).expect("set current");
+
+        let proxy = ProxyServer::new(
+            ProxyConfig {
+                listen_port: 0,
+                enable_logging: false,
+                non_streaming_timeout: 120,
+                ..ProxyConfig::default()
+            },
+            db,
+            None,
+        );
+        let info = proxy.start().await.expect("start proxy");
+        let url = format!("http://127.0.0.1:{}", info.port);
+        (proxy, url)
+    }
+
+    /// Chat 客户端 × Responses 上游（原 CC Switch 不支持的一格）专项验证。
+    ///
+    /// 矩阵测试只发纯文本，这里补上这条链路真正容易出问题的部分：
+    /// 工具定义 / 工具调用响应 / 多轮 tool 消息回传 / 流式工具分块与 usage。
+    ///
+    /// ```bash
+    /// E2E_UPSTREAM_API_KEY=... E2E_UPSTREAM_BASE_URL=https://bailucode.com/openapi/v1 \
+    /// E2E_UPSTREAM_MODEL=bailu-2.7 \
+    /// cargo test --lib real_upstream_chat_client_responses_provider -- --ignored --nocapture
+    /// ```
+    #[tokio::test]
+    #[ignore = "需要真实上游 API Key，手动运行"]
+    async fn real_upstream_chat_client_responses_provider() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let Ok(api_key) = std::env::var("E2E_UPSTREAM_API_KEY") else {
+            eprintln!("跳过：未设置 E2E_UPSTREAM_API_KEY");
+            return;
+        };
+        let base_url = std::env::var("E2E_UPSTREAM_BASE_URL")
+            .unwrap_or_else(|_| "https://bailucode.com/openapi/v1".to_string());
+        let model = std::env::var("E2E_UPSTREAM_MODEL")
+            .unwrap_or_else(|_| "bailu-2.7".to_string());
+        if let Ok(proxy) = std::env::var("E2E_UPSTREAM_PROXY") {
+            crate::proxy::http_client::apply_proxy(Some(&proxy))
+                .expect("apply upstream proxy");
+        }
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .unwrap();
+
+        let (proxy, proxy_url) =
+            start_real_upstream_proxy("openai_responses", &base_url, &api_key).await;
+
+        let tools = json!([{
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "查询指定城市的当前天气",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "city": { "type": "string" } },
+                    "required": ["city"]
+                }
+            }
+        }]);
+        let system = json!({"role": "system", "content": "你是天气助手，需要天气数据时必须调用 get_weather。"});
+        let user = json!({"role": "user", "content": "上海现在天气怎么样？必须调用 get_weather 查询，不要凭记忆回答。"});
+
+        // ---- 1. 非流式 + 工具调用 ----
+        let body = json!({
+            "model": model,
+            "max_tokens": 512,
+            "stream": false,
+            "tools": tools,
+            "tool_choice": "auto",
+            "messages": [system, user],
+        });
+        let response = client
+            .post(format!("{proxy_url}/v1/chat/completions"))
+            .json(&body)
+            .send()
+            .await
+            .expect("chat request");
+        let status = response.status().as_u16();
+        let text = response.text().await.unwrap_or_default();
+        println!("[chat×responses] 非流式工具调用 -> {status}: {text}");
+        assert_eq!(status, 200, "非流式工具调用失败: {text}");
+        let parsed: Value = serde_json::from_str(&text).expect("chat completion JSON");
+        assert_eq!(parsed["object"], "chat.completion");
+        let message = &parsed["choices"][0]["message"];
+        let tool_calls = message["tool_calls"]
+            .as_array()
+            .unwrap_or_else(|| panic!("响应里没有 tool_calls: {text}"));
+        assert!(!tool_calls.is_empty(), "tool_calls 为空: {text}");
+        assert_eq!(tool_calls[0]["type"], "function");
+        assert_eq!(tool_calls[0]["function"]["name"], "get_weather");
+        let arguments: Value = serde_json::from_str(
+            tool_calls[0]["function"]["arguments"]
+                .as_str()
+                .unwrap_or("{}"),
+        )
+        .unwrap_or_else(|e| panic!("工具参数不是合法 JSON: {e}; {text}"));
+        assert!(
+            arguments.get("city").is_some(),
+            "工具参数缺少 city: {text}"
+        );
+        assert_eq!(parsed["choices"][0]["finish_reason"], "tool_calls");
+        assert!(
+            parsed["usage"]["prompt_tokens"].as_u64().unwrap_or(0) > 0,
+            "usage 未映射: {text}"
+        );
+
+        // ---- 2. 多轮：把 tool 结果回传，验证 function_call / function_call_output ----
+        let call = tool_calls[0].clone();
+        let call_id = call["id"].as_str().unwrap_or_default().to_string();
+        println!("[chat×responses] 第一轮 call_id={call_id}");
+        let second = json!({
+            "model": model,
+            "max_tokens": 512,
+            "stream": false,
+            "tools": tools,
+            "messages": [
+                system,
+                user,
+                {"role": "assistant", "content": null, "tool_calls": [call]},
+                {"role": "tool", "tool_call_id": call_id, "content": "上海：晴，24℃，东南风 2 级"},
+            ],
+        });
+        let response = client
+            .post(format!("{proxy_url}/v1/chat/completions"))
+            .json(&second)
+            .send()
+            .await
+            .expect("second turn");
+        let status = response.status().as_u16();
+        let text = response.text().await.unwrap_or_default();
+        println!("[chat×responses] 多轮回传 -> {status}: {text}");
+        assert_eq!(status, 200, "多轮回传失败: {text}");
+        let parsed: Value = serde_json::from_str(&text).expect("second completion JSON");
+        let content = parsed["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            !content.is_empty(),
+            "多轮后回复为空（tool 结果可能没送到上游）: {text}"
+        );
+        assert!(
+            content.contains("24") || content.contains("晴"),
+            "回复没有用上 tool 结果: {text}"
+        );
+
+        // ---- 3. 流式 + 工具调用：分块必须是 chat.completion.chunk 形状 ----
+        let body = json!({
+            "model": model,
+            "max_tokens": 512,
+            "stream": true,
+            "tools": tools,
+            "tool_choice": "auto",
+            "messages": [system, user],
+        });
+        let response = client
+            .post(format!("{proxy_url}/v1/chat/completions"))
+            .json(&body)
+            .send()
+            .await
+            .expect("streaming chat request");
+        let status = response.status().as_u16();
+        let text = response.text().await.unwrap_or_default();
+        println!("[chat×responses] 流式工具调用 -> {status}: {text}");
+        assert_eq!(status, 200, "流式工具调用失败: {text}");
+        assert!(
+            text.contains("chat.completion.chunk"),
+            "流式分块不是 Chat 形状: {text}"
+        );
+        assert!(
+            text.contains("\"tool_calls\""),
+            "流式没有工具调用分块: {text}"
+        );
+        assert!(
+            text.contains("\"finish_reason\":\"tool_calls\""),
+            "流式 finish_reason 不是 tool_calls: {text}"
+        );
+        assert!(text.contains("[DONE]"), "流式缺少 [DONE]: {text}");
+
+        proxy.stop().await.expect("stop proxy");
+    }
+
+    /// 5 个没有转换器的格子必须返回 501 且文案可读。
+    ///
+    /// 矩阵是唯一权威（`Matrix::unsupported_cells`），这里按它逐格发真实请求，
+    /// 保证「矩阵说不行」与「代理真的拒绝」一致，且拒绝发生在上游请求之前
+    /// （不配真实上游也能跑）。
+    #[tokio::test]
+    async fn unsupported_protocol_cells_return_501_with_readable_message() {
+        use crate::protocol::{Matrix, Protocol};
+
+        // 不需要真实上游：501 在发起请求前就返回，base URL 指向不可达地址即可。
+        if let Ok(proxy) = std::env::var("E2E_UPSTREAM_PROXY") {
+            let _ = crate::proxy::http_client::apply_proxy(Some(&proxy));
+        }
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap();
+
+        let path_of = |protocol: Protocol| match protocol {
+            Protocol::Anthropic => "/v1/messages",
+            Protocol::OpenAiChat => "/v1/chat/completions",
+            Protocol::OpenAiResponses => "/v1/responses",
+            Protocol::Gemini => "/v1beta/models/test-model:generateContent",
+        };
+        let body_of = |protocol: Protocol| match protocol {
+            Protocol::Anthropic => json!({
+                "model": "test-model",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+            }),
+            Protocol::OpenAiChat => json!({
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+            }),
+            Protocol::OpenAiResponses => json!({
+                "model": "test-model",
+                "input": "hi",
+            }),
+            Protocol::Gemini => json!({
+                "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+            }),
+        };
+
+        let cells = Matrix::unsupported_cells();
+        assert_eq!(cells.len(), 5, "不支持格数量应保持 5: {cells:?}");
+
+        for (inbound, upstream) in cells {
+            let db = Arc::new(Database::memory().expect("memory database"));
+            let mut provider = Provider::with_id(
+                format!("unsupported-{}", upstream.as_str()),
+                "Unsupported cell".to_string(),
+                json!({
+                    "env": {
+                        "ANTHROPIC_BASE_URL": "https://upstream.invalid",
+                        "ANTHROPIC_AUTH_TOKEN": "test-key",
+                    },
+                }),
+                None,
+            );
+            provider.meta = Some(ProviderMeta {
+                api_format: Some(upstream.as_str().to_string()),
+                ..ProviderMeta::default()
+            });
+            db.save_provider("claude", &provider).expect("save provider");
+            db.set_current_provider("claude", &provider.id).expect("set current");
+
+            let proxy = ProxyServer::new(
+                ProxyConfig {
+                    listen_port: 0,
+                    enable_logging: false,
+                    ..ProxyConfig::default()
+                },
+                db,
+                None,
+            );
+            let info = proxy.start().await.expect("start proxy");
+
+            let response = client
+                .post(format!(
+                    "http://127.0.0.1:{}{}",
+                    info.port,
+                    path_of(inbound)
+                ))
+                .json(&body_of(inbound))
+                .send()
+                .await
+                .expect("request to local proxy");
+            let status = response.status().as_u16();
+            let text = response.text().await.unwrap_or_default();
+            assert_eq!(
+                status, 501,
+                "[{} → {}] 应返回 501: {text}",
+                inbound.as_str(),
+                upstream.as_str()
+            );
+            let parsed: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+            let message = parsed["error"]["message"]
+                .as_str()
+                .or_else(|| parsed["message"].as_str())
+                .unwrap_or(&text);
+            assert!(
+                message.contains("没有可用的转换器"),
+                "[{} → {}] 501 文案不可读: {text}",
+                inbound.as_str(),
+                upstream.as_str()
+            );
+            assert!(
+                message.contains(inbound.label()) && message.contains(upstream.label()),
+                "[{} → {}] 501 文案未标明两种协议: {text}",
+                inbound.as_str(),
+                upstream.as_str()
+            );
+
+            proxy.stop().await.expect("stop proxy");
+        }
+    }
 }

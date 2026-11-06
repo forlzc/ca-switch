@@ -1338,15 +1338,25 @@ impl RequestForwarder {
         // 唯一的 API 入口不再支持 Copilot / Codex 客户端形态。
         let is_copilot = false;
 
-        // Codex 客户端专属的上游转换模式已移除。
-        let codex_responses_to_chat = false;
-        let codex_responses_to_anthropic = false;
+        // Responses 入口 × Chat / Anthropic 上游：请求方向改 endpoint 与 body，
+        // 响应方向由 handle_responses 依据 `codex_upstream_format` 还原成 Responses 形状。
+        // 判定只看协议矩阵，不再依赖客户端家族。
+        let inbound_protocol = inbound_protocol_for(app_type, endpoint);
+        let upstream_protocol = provider_protocol(app_type, provider);
+        let codex_responses_to_chat = inbound_protocol == Protocol::OpenAiResponses
+            && upstream_protocol == Protocol::OpenAiChat;
+        let codex_responses_to_anthropic = inbound_protocol == Protocol::OpenAiResponses
+            && upstream_protocol == Protocol::Anthropic;
         // P4：Chat 入口 × Responses 上游。请求方向改 endpoint 与 body，
         // 响应方向由 handle_chat_completions 依据供应商协议转回 Chat 形状。
         let chat_to_responses = !codex_responses_to_chat
             && !codex_responses_to_anthropic
-            && inbound_protocol_for(app_type, endpoint) == Protocol::OpenAiChat
-            && provider_protocol(app_type, provider) == Protocol::OpenAiResponses;
+            && inbound_protocol == Protocol::OpenAiChat
+            && upstream_protocol == Protocol::OpenAiResponses;
+        // Chat 入口 × Anthropic 上游：直连转换，响应方向由
+        // handle_chat_completions 转回 Chat 形状。
+        let chat_to_anthropic = inbound_protocol == Protocol::OpenAiChat
+            && upstream_protocol == Protocol::Anthropic;
         // 模型名直接透传，不再做任何 Claude Code 模型映射 / 1M 后缀处理。
         let mapped_body = body.clone();
 
@@ -1379,7 +1389,13 @@ impl RequestForwarder {
             None
         };
 
-        *codex_upstream_format_out = None;
+        *codex_upstream_format_out = if codex_responses_to_anthropic {
+            Some(CodexUpstreamFormat::Anthropic)
+        } else if codex_responses_to_chat {
+            Some(CodexUpstreamFormat::ChatCompletions)
+        } else {
+            None
+        };
         let resolved_claude_api_format = if adapter.name() == "Claude" {
             Some(
                 self.resolve_claude_api_format(provider, &mapped_body)
@@ -1388,7 +1404,10 @@ impl RequestForwarder {
         } else {
             None
         };
-        if adapter.name() == "Claude" {
+        // Claude 的请求体规范化/转换只适用于 Anthropic 入口。Responses / Chat
+        // 入口有自己的转换分支（上面三个 flag），不能被 Claude 转换器再加工。
+        let claude_inbound = inbound_protocol == Protocol::Anthropic;
+        if adapter.name() == "Claude" && claude_inbound {
             if let Some(api_format) = resolved_claude_api_format.as_deref() {
                 super::providers::normalize_anthropic_messages_for_provider(
                     &mut mapped_body,
@@ -1398,17 +1417,18 @@ impl RequestForwarder {
                 self.apply_media_prevention(&mut mapped_body, provider);
             }
         }
-        let needs_transform = match resolved_claude_api_format.as_deref() {
-            Some(api_format) => super::providers::claude_api_format_needs_transform(api_format),
-            None => adapter.needs_transform(provider),
-        };
+        let needs_transform = claude_inbound
+            && match resolved_claude_api_format.as_deref() {
+                Some(api_format) => super::providers::claude_api_format_needs_transform(api_format),
+                None => adapter.needs_transform(provider),
+            };
         // Codex → Anthropic: Claude Code emulation is off by default and only
         // enabled when the user explicitly turns it on in the UI, so requests can
         // pass a gateway's "Claude Code only" fingerprint check (User-Agent /
         // anthropic-beta / x-app / system prompt first line). Defaulting to off
         // avoids leaking the Claude Code fingerprint and identity prompt to
         // general-purpose gateways.
-        let codex_impersonate_claude_code = codex_responses_to_anthropic
+        let codex_impersonate_claude_code = (codex_responses_to_anthropic || chat_to_anthropic)
             && provider
                 .meta
                 .as_ref()
@@ -1421,6 +1441,8 @@ impl RequestForwarder {
                 rewrite_codex_responses_endpoint_to_anthropic(endpoint)
             } else if chat_to_responses {
                 rewrite_chat_endpoint_to_responses(endpoint)
+            } else if chat_to_anthropic {
+                rewrite_chat_endpoint_to_anthropic(endpoint)
             } else if needs_transform && adapter.name() == "Claude" {
                 let api_format = resolved_claude_api_format
                     .as_deref()
@@ -1579,6 +1601,8 @@ impl RequestForwarder {
             anthropic_body
         } else if chat_to_responses {
             super::providers::transform_chat_responses::chat_request_to_responses(mapped_body)?
+        } else if chat_to_anthropic {
+            super::providers::transform_chat_anthropic::chat_request_to_anthropic(mapped_body)?
         } else if needs_transform {
             if adapter.name() == "Claude" {
                 let api_format = resolved_claude_api_format
@@ -1724,6 +1748,7 @@ impl RequestForwarder {
         let force_identity_encoding = needs_transform
             || codex_responses_to_chat
             || codex_responses_to_anthropic
+            || chat_to_anthropic
             || request_is_streaming;
 
         // 获取认证头（提前准备，用于内联替换），同时保留仅用于日志脱敏的
@@ -1924,16 +1949,21 @@ impl RequestForwarder {
             // 身份（`chatgpt-account-id` 等），它们只能发往官方上游。Stack 目标不会是官方账号，
             // 这里仍按上游判断，防止以后放宽。只限 Codex：Claude Code 自己的 `x-stainless-*`
             // 是 Anthropic SDK 的正常请求头，Stack 请求照常转发。
-            if should_strip_codex_client_fingerprint_header(key_str, codex_responses_to_anthropic) {
+            if should_strip_codex_client_fingerprint_header(
+                key_str,
+                codex_responses_to_anthropic || chat_to_anthropic,
+            ) {
                 continue;
             }
 
-            // --- accept — force application/json on the Codex→Anthropic path ---
-            // The Codex CLI sends `Accept: text/event-stream`, whereas a native
-            // Anthropic client sends `application/json` (streaming is driven by
-            // the body's stream:true). Strict Anthropic gateways return 406 Not
+            // --- accept — force application/json on the Codex/Chat→Anthropic path ---
+            // The clients send `Accept: text/event-stream` when streaming, whereas
+            // a native Anthropic client sends `application/json` (streaming is driven
+            // by the body's stream:true). Strict Anthropic gateways return 406 Not
             // Acceptable for an event-stream Accept, so normalize it here.
-            if codex_responses_to_anthropic && key_str.eq_ignore_ascii_case("accept") {
+            if (codex_responses_to_anthropic || chat_to_anthropic)
+                && key_str.eq_ignore_ascii_case("accept")
+            {
                 if !saw_accept {
                     saw_accept = true;
                     ordered_headers.append(
@@ -2022,8 +2052,8 @@ impl RequestForwarder {
             );
         }
 
-        // On the Codex→Anthropic path, add application/json when Accept is missing (matching a native Anthropic client).
-        if codex_responses_to_anthropic && !saw_accept {
+        // On the Codex/Chat→Anthropic path, add application/json when Accept is missing
+        if (codex_responses_to_anthropic || chat_to_anthropic) && !saw_accept {
             ordered_headers.append(
                 http::header::ACCEPT,
                 http::HeaderValue::from_static("application/json"),
@@ -2746,6 +2776,18 @@ fn rewrite_chat_endpoint_to_responses(endpoint: &str) -> (String, Option<String>
         None => path.to_string(),
     };
     (rewritten, query.map(ToString::to_string))
+}
+
+/// Chat 入口 → Anthropic 上游：`/chat/completions` 改成 `/v1/messages`。
+fn rewrite_chat_endpoint_to_anthropic(endpoint: &str) -> (String, Option<String>) {
+    let (_path, query) = split_endpoint_and_query(endpoint);
+    let passthrough_query = query.map(ToString::to_string);
+    let target_path = "/v1/messages";
+    let rewritten = match passthrough_query.as_deref() {
+        Some(query) if !query.is_empty() => format!("{target_path}?{query}"),
+        _ => target_path.to_string(),
+    };
+    (rewritten, passthrough_query)
 }
 
 /// 供应商把完整端点写进 base URL 时，把 `/chat/completions` 换成 `/responses`。

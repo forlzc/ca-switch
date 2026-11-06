@@ -58,6 +58,9 @@ pub fn map_proxy_error_to_status(error: &ProxyError) -> u16 {
         // 转换错误：422 Unprocessable Entity
         ProxyError::TransformError(_) => 422,
 
+        // 协议矩阵没有对应转换器：501 Not Implemented（与 into_response 一致）
+        ProxyError::ProtocolUnsupported(_) => 501,
+
         // 其他未知错误：500 Internal Server Error
         _ => 500,
     }

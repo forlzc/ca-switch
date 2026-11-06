@@ -231,7 +231,13 @@ impl Matrix {
                 response: "responses_response_to_chat",
                 wiring: "proxy/providers/transform_chat_responses.rs",
             }),
-            // 其余 6 格永远不做，返回 501 + 可读文案。
+            // Chat 入口 → Anthropic 上游（直连转换，见 `transform_chat_anthropic.rs`）。
+            (OpenAiChat, Anthropic) => Conversion::Convert(Transform {
+                request: "chat_request_to_anthropic",
+                response: "anthropic_response_to_chat",
+                wiring: "proxy/providers/transform_chat_anthropic.rs",
+            }),
+            // 其余 5 格永远不做，返回 501 + 可读文案。
             _ => Conversion::Unsupported,
         }
     }
@@ -455,7 +461,7 @@ mod tests {
     /// 12 格 = 4×4 − 4 个同协议。这张表是唯一权威：以后谁动了转换函数，
     /// 这里会红，不允许再靠记忆判断「有没有转换器」。
     #[test]
-    fn matrix_covers_exactly_six_cells() {
+    fn matrix_covers_exactly_seven_cells() {
         use Protocol::*;
         let expected_convert = [
             (Anthropic, OpenAiChat),
@@ -464,6 +470,7 @@ mod tests {
             (OpenAiResponses, OpenAiChat),
             (OpenAiResponses, Anthropic),
             (OpenAiChat, OpenAiResponses),
+            (OpenAiChat, Anthropic),
         ];
 
         let mut passthrough = 0;
@@ -480,12 +487,12 @@ mod tests {
         }
 
         assert_eq!(passthrough, 4, "同协议四格应为透传");
-        assert_eq!(convert.len(), 6, "P4 之后接了 6 个转换方向");
-        assert_eq!(unsupported.len(), 6, "16 - 4 - 6");
+        assert_eq!(convert.len(), 7, "目前已接了 7 个转换方向");
+        assert_eq!(unsupported.len(), 5, "16 - 4 - 7");
         for cell in expected_convert {
             assert!(convert.contains(&cell), "缺了 {cell:?} 的转换接线");
         }
-        assert_eq!(Matrix::unsupported_cells().len(), 6);
+        assert_eq!(Matrix::unsupported_cells().len(), 5);
     }
 
     /// 需求 4：chat 入口 → responses 上游必须已经接通。
@@ -514,6 +521,8 @@ mod tests {
             (Protocol::Anthropic, Protocol::Gemini),
             (Protocol::OpenAiResponses, Protocol::OpenAiChat),
             (Protocol::OpenAiResponses, Protocol::Anthropic),
+            (Protocol::OpenAiChat, Protocol::OpenAiResponses),
+            (Protocol::OpenAiChat, Protocol::Anthropic),
         ] {
             match Matrix::plan(inbound, upstream) {
                 Conversion::Convert(t) => {

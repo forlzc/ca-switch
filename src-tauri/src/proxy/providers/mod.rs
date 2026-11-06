@@ -35,6 +35,7 @@ pub mod streaming_gemini;
 pub mod streaming_responses;
 pub mod streaming_responses_chat;
 pub mod transform;
+pub mod transform_chat_anthropic;
 pub mod transform_chat_responses;
 pub mod transform_codex_anthropic;
 pub mod transform_codex_chat;
