@@ -27,6 +27,56 @@ const ANTHROPIC_REDACTED_THINKING_PLACEHOLDER: &str = "[redacted thinking]";
 // disrupt the model's chain of thought. Do not re-add without re-confirming.
 const REASONING_VENDOR_HINTS: &[&str] = &["deepseek", "mimo", "xiaomimimo"];
 
+/// OpenAI 兼容协议在配置里使用的 Base URL 变量名；其余协议沿用 Anthropic 的。
+fn openai_base_url_key(api_format: &str) -> &'static str {
+    match api_format {
+        "openai_chat" | "openai_responses" => "OPENAI_BASE_URL",
+        _ => "ANTHROPIC_BASE_URL",
+    }
+}
+
+/// 供应商配置的上游模型：按当前上游协议读取 env 变量，兼容旧键与顶层 model。
+///
+/// API 表单里的「模型」下拉写入 env.<protocol>_MODEL；客户端请求自带的模型名
+/// 只是展示/占位，转发前一律用这里返回的值覆盖。
+pub fn claude_provider_upstream_model(provider: &Provider) -> Option<String> {
+    let api_format = get_claude_api_format(provider);
+    let preferred_key = match api_format {
+        "openai_chat" | "openai_responses" => "OPENAI_MODEL",
+        "gemini_native" => "GEMINI_MODEL",
+        _ => "ANTHROPIC_MODEL",
+    };
+    let env = provider.settings_config.get("env");
+    let read_env = |key: &str| {
+        env.and_then(|env| env.get(key))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+            .map(str::to_string)
+    };
+
+    read_env(preferred_key)
+        .or_else(|| read_env("ANTHROPIC_MODEL"))
+        .or_else(|| read_env("OPENAI_MODEL"))
+        .or_else(|| read_env("GEMINI_MODEL"))
+        .or_else(|| {
+            provider
+                .settings_config
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+                .map(str::to_string)
+        })
+}
+
+/// 用供应商配置的上游模型覆盖请求体里的 model；未配置时保持客户端传入值。
+pub fn apply_claude_upstream_model(provider: &Provider, body: &mut Value) -> Option<String> {
+    let model = claude_provider_upstream_model(provider)?;
+    body["model"] = Value::String(model.clone());
+    Some(model)
+}
+
 /// 获取 Claude 供应商的 API 格式
 ///
 /// 供 handler/forwarder 外部使用的公开函数。
@@ -603,10 +653,16 @@ impl ProviderAdapter for ClaudeAdapter {
     }
 
     fn extract_base_url(&self, provider: &Provider) -> Result<String, ProxyError> {
-        // 1. 从 env 中获取
+        // 1. 从 env 中获取：优先读当前上游协议对应的变量名，再兜底旧键
         if let Some(env) = provider.settings_config.get("env") {
-            if let Some(url) = env.get("ANTHROPIC_BASE_URL").and_then(|v| v.as_str()) {
+            let preferred_key = openai_base_url_key(get_claude_api_format(provider));
+            if let Some(url) = env.get(preferred_key).and_then(|v| v.as_str()) {
                 return Ok(url.trim_end_matches('/').to_string());
+            }
+            for key in ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"] {
+                if let Some(url) = env.get(key).and_then(|v| v.as_str()) {
+                    return Ok(url.trim_end_matches('/').to_string());
+                }
             }
         }
 
@@ -794,5 +850,108 @@ impl ProviderAdapter for ClaudeAdapter {
         } else {
             super::transform::openai_to_anthropic(body)
         }
+    }
+}
+
+#[cfg(test)]
+mod upstream_model_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn provider_for(settings: Value, api_format: Option<&str>) -> Provider {
+        let mut value = json!({
+            "id": "p",
+            "name": "p",
+            "settingsConfig": settings,
+            "category": "custom",
+        });
+        if let Some(api_format) = api_format {
+            value["meta"] = json!({ "apiFormat": api_format });
+        }
+        serde_json::from_value(value).expect("provider")
+    }
+
+    #[test]
+    fn upstream_model_prefers_current_protocol_key() {
+        let provider = provider_for(
+            json!({ "env": {
+                "ANTHROPIC_MODEL": "claude-old",
+                "OPENAI_MODEL": "gpt-new",
+            }}),
+            Some("openai_chat"),
+        );
+        assert_eq!(
+            claude_provider_upstream_model(&provider).as_deref(),
+            Some("gpt-new")
+        );
+
+        let mut body = json!({ "model": "client-model" });
+        assert_eq!(
+            apply_claude_upstream_model(&provider, &mut body).as_deref(),
+            Some("gpt-new")
+        );
+        assert_eq!(body["model"], json!("gpt-new"));
+    }
+
+    #[test]
+    fn upstream_model_falls_back_and_ignores_blank() {
+        let anthropic = provider_for(
+            json!({ "env": { "ANTHROPIC_MODEL": "claude-configured" } }),
+            Some("anthropic"),
+        );
+        assert_eq!(
+            claude_provider_upstream_model(&anthropic).as_deref(),
+            Some("claude-configured")
+        );
+
+        let old_openai_row = provider_for(
+            json!({ "env": { "ANTHROPIC_MODEL": "legacy" } }),
+            Some("openai_responses"),
+        );
+        assert_eq!(
+            claude_provider_upstream_model(&old_openai_row).as_deref(),
+            Some("legacy")
+        );
+
+        let blank = provider_for(json!({ "env": { "ANTHROPIC_MODEL": "  " } }), None);
+        assert_eq!(claude_provider_upstream_model(&blank), None);
+
+        let mut body = json!({ "model": "client-model" });
+        assert_eq!(apply_claude_upstream_model(&blank, &mut body), None);
+        assert_eq!(body["model"], json!("client-model"));
+    }
+
+    #[test]
+    fn base_url_follows_protocol_with_legacy_fallback() {
+        let adapter = ClaudeAdapter::new();
+        let openai = provider_for(
+            json!({ "env": {
+                "ANTHROPIC_BASE_URL": "https://legacy.example",
+                "OPENAI_BASE_URL": "https://openai.example/v1",
+            }}),
+            Some("openai_chat"),
+        );
+        assert_eq!(
+            adapter.extract_base_url(&openai).unwrap(),
+            "https://openai.example/v1"
+        );
+
+        let legacy_openai = provider_for(
+            json!({ "env": { "ANTHROPIC_BASE_URL": "https://legacy.example" } }),
+            Some("openai_responses"),
+        );
+        assert_eq!(
+            adapter.extract_base_url(&legacy_openai).unwrap(),
+            "https://legacy.example"
+        );
+
+        let anthropic = provider_for(
+            json!({ "env": { "ANTHROPIC_BASE_URL": "https://anthropic.example" } }),
+            Some("anthropic"),
+        );
+        assert_eq!(
+            adapter.extract_base_url(&anthropic).unwrap(),
+            "https://anthropic.example"
+        );
     }
 }

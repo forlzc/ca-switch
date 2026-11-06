@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import type { ProviderCategory } from "@/types";
+import type { ClaudeApiFormat, ProviderCategory } from "@/types";
 import {
   getApiKeyFromConfig,
   setApiKeyInConfig,
@@ -18,6 +18,7 @@ interface UseApiKeyStateProps {
   category?: ProviderCategory;
   appType?: string;
   apiKeyField?: string;
+  apiFormat?: ClaudeApiFormat;
 }
 
 /**
@@ -32,10 +33,11 @@ export function useApiKeyState({
   category,
   appType,
   apiKeyField,
+  apiFormat,
 }: UseApiKeyStateProps) {
   const [apiKey, setApiKey] = useState(() => {
     if (initialConfig) {
-      return getApiKeyFromConfig(initialConfig, appType);
+      return getApiKeyFromConfig(initialConfig, appType, apiFormat);
     }
     return "";
   });
@@ -52,11 +54,11 @@ export function useApiKeyState({
     }
 
     // 从配置中提取 API Key（如果不存在则返回空字符串）
-    const extracted = getApiKeyFromConfig(initialConfig, appType);
+    const extracted = getApiKeyFromConfig(initialConfig, appType, apiFormat);
     if (extracted !== apiKey) {
       setApiKey(extracted);
     }
-  }, [initialConfig, appType, apiKey]);
+  }, [initialConfig, appType, apiFormat, apiKey]);
 
   const handleApiKeyChange = useCallback(
     (key: string) => {
@@ -74,6 +76,7 @@ export function useApiKeyState({
             category !== "official" && category !== "cloud_provider",
           appType,
           apiKeyField,
+          apiFormat,
         },
       );
 
@@ -86,6 +89,7 @@ export function useApiKeyState({
       category,
       appType,
       apiKeyField,
+      apiFormat,
       onConfigChange,
     ],
   );

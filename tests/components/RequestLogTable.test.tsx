@@ -3,7 +3,6 @@ import { renderWithQueryClient as render } from "../utils/testQueryClient";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   RequestLogTable,
-  appDisplayName,
   formatHitPercent,
   formatLogTime,
 } from "@/components/usage/RequestLogTable";
@@ -278,10 +277,6 @@ describe("RequestLogTable", () => {
     expect(
       screen.getByTitle("Kimi For Coding Plan Provider"),
     ).toHaveTextContent("Kimi For Coding Plan Provider");
-    // 入口协议列：不再显示具体客户端名称
-    expect(screen.getByTitle("Anthropic")).toHaveTextContent("Anthropic");
-    expect(appDisplayName("claude-desktop")).toBe("Anthropic");
-    expect(appDisplayName("unknown-app")).toBe("unknown-app");
   });
 });
 
@@ -331,9 +326,9 @@ describe("RequestLogTable optional columns", () => {
     const headers = screen
       .getAllByRole("columnheader")
       .map((th) => th.textContent);
-    expect(headers).toHaveLength(10);
+    expect(headers).toHaveLength(9);
     expect(headers).not.toContain("usage.logColumns.hitRate");
-    expect(screen.getByText("usage.noData")).toHaveAttribute("colspan", "10");
+    expect(screen.getByText("usage.noData")).toHaveAttribute("colspan", "9");
   });
 
   it("renders cache write, hit rate, total time and status code", () => {

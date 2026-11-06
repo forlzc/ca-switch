@@ -1357,11 +1357,14 @@ impl RequestForwarder {
         // handle_chat_completions 转回 Chat 形状。
         let chat_to_anthropic = inbound_protocol == Protocol::OpenAiChat
             && upstream_protocol == Protocol::Anthropic;
-        // 模型名直接透传，不再做任何 Claude Code 模型映射 / 1M 后缀处理。
+        // 模型名默认透传；若供应商配置了上游模型，则用配置值覆盖客户端传入的模型名。
         let mapped_body = body.clone();
 
         // 与 CCH 对齐：请求前不做 thinking 主动改写（仅保留兼容入口）
         let mut mapped_body = normalize_thinking_type(mapped_body);
+        if !self.keeps_resolved_model() {
+            super::providers::apply_claude_upstream_model(provider, &mut mapped_body);
+        }
         let is_copilot_codex_responses = false;
 
         // The OpenCode gateway wants a stable per-conversation session id (see the

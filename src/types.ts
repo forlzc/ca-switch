@@ -178,11 +178,11 @@ export interface ProviderMeta {
   isPartner?: boolean;
   // 合作伙伴促销 key（用于后端识别 PackyCode 等）
   partnerPromotionKey?: string;
-  // API 格式（Claude / Codex 供应商使用）
-  // - "anthropic": 原生 Anthropic Messages API 格式，直接透传
-  // - "openai_chat": OpenAI Chat Completions 格式，需要格式转换
-  // - "openai_responses": OpenAI Responses API 格式，需要格式转换
-  // - "gemini_native": Gemini Native generateContent API 格式，需要格式转换
+  // 上游供应商实际提供的 API 格式（四种都在同一套协议矩阵里，由代理按入口协议决定是否转换）
+  // - "anthropic": Anthropic Messages API
+  // - "openai_chat": OpenAI Chat Completions
+  // - "openai_responses": OpenAI Responses API
+  // - "gemini_native": Gemini Native generateContent
   apiFormat?:
     | "anthropic"
     | "openai_chat"
@@ -236,11 +236,11 @@ export type SkillSyncMethod = "auto" | "symlink" | "copy";
 // Skill 存储位置
 export type SkillStorageLocation = "cc_switch" | "unified";
 
-// Claude API 格式类型
-// - "anthropic": 原生 Anthropic Messages API 格式，直接透传
-// - "openai_chat": OpenAI Chat Completions 格式，需要格式转换
-// - "openai_responses": OpenAI Responses API 格式，需要格式转换
-// - "gemini_native": Gemini Native generateContent API 格式，需要格式转换
+// Claude API 格式类型（上游协议，四种都由代理按入口协议自动决定是否转换）
+// - "anthropic": Anthropic Messages API
+// - "openai_chat": OpenAI Chat Completions
+// - "openai_responses": OpenAI Responses API
+// - "gemini_native": Gemini Native generateContent
 export type ClaudeApiFormat =
   | "anthropic"
   | "openai_chat"

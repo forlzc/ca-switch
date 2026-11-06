@@ -22,6 +22,14 @@ import { CommonConfigEditor } from "./CommonConfigEditor";
 import { BasicFormFields } from "./BasicFormFields";
 import { ClaudeFormFields } from "./ClaudeFormFields";
 import {
+  ALL_CLAUDE_API_KEY_KEYS,
+  ALL_CLAUDE_BASE_URL_KEYS,
+  ALL_CLAUDE_MODEL_KEYS,
+  claudeConfigKeys,
+  readEnvValue,
+  writeEnvValue,
+} from "@/config/claudeApiFormatConfig";
+import {
   getApiKeyFromConfig,
   hasApiKeyField,
 } from "@/utils/providerConfigUtils";
@@ -39,10 +47,12 @@ type LocalProxyRequestOverridesBuildResult = ReturnType<
   typeof buildLocalProxyRequestOverrides
 >;
 
-/** 从配置里读当前选定的上游模型（ANTHROPIC_MODEL）。 */
-function readModelFromConfig(config: unknown): string {
-  const env = (config as { env?: Record<string, unknown> } | undefined)?.env;
-  return typeof env?.ANTHROPIC_MODEL === "string" ? env.ANTHROPIC_MODEL : "";
+/** 从配置里读当前选定的上游模型，变量名跟随上游协议。 */
+function readModelFromConfig(
+  config: unknown,
+  apiFormat: ClaudeApiFormat,
+): string {
+  return readEnvValue(config, claudeConfigKeys(apiFormat).modelKeys);
 }
 
 export interface ProviderFormProps {
@@ -102,8 +112,14 @@ function ProviderFormFull({
     () => initialData?.meta?.isFullUrl ?? false,
   );
   const [model, setModel] = useState<string>(() =>
-    readModelFromConfig(initialData?.settingsConfig),
+    readModelFromConfig(
+      initialData?.settingsConfig,
+      initialData?.meta?.apiFormat ?? "anthropic",
+    ),
   );
+  const [localApiFormat, setLocalApiFormat] = useState<ClaudeApiFormat>(() => {
+    return initialData?.meta?.apiFormat ?? "anthropic";
+  });
 
   useEffect(() => {
     if (!initialData) {
@@ -125,7 +141,12 @@ function ProviderFormFull({
         initialData?.meta?.localProxyRequestOverrides?.body,
       ),
     );
-    setModel(readModelFromConfig(initialData?.settingsConfig));
+    setModel(
+      readModelFromConfig(
+        initialData?.settingsConfig,
+        initialData?.meta?.apiFormat ?? "anthropic",
+      ),
+    );
   }, [initialData]);
 
   const defaultValues: ProviderFormData = useMemo(
@@ -205,6 +226,7 @@ function ProviderFormFull({
     category,
     appType: appId,
     apiKeyField: localApiKeyField,
+    apiFormat: localApiFormat,
   });
 
   const { baseUrl, handleClaudeBaseUrlChange } = useBaseUrlState({
@@ -212,27 +234,23 @@ function ProviderFormFull({
     settingsConfig: form.getValues("settingsConfig"),
     onSettingsConfigChange: handleSettingsConfigChange,
     getSettingsConfig,
+    apiFormat: localApiFormat,
   });
 
-  // 直接选择服务商提供的一个模型，写进 ANTHROPIC_MODEL；留空表示跟随请求里的模型名。
+  // 直接选择服务商提供的一个模型，写进当前协议对应的 MODEL 变量；留空表示跟随请求里的模型名。
   const handleModelChange = useCallback(
     (next: string) => {
       setModel(next);
       try {
         const config = JSON.parse(getSettingsConfig() || "{}");
-        if (!config.env) config.env = {};
-        const trimmed = next.trim();
-        if (trimmed) {
-          config.env.ANTHROPIC_MODEL = trimmed;
-        } else {
-          delete config.env.ANTHROPIC_MODEL;
-        }
+        const { modelKeys } = claudeConfigKeys(localApiFormat);
+        writeEnvValue(config, modelKeys, next, ALL_CLAUDE_MODEL_KEYS);
         handleSettingsConfigChange(JSON.stringify(config, null, 2));
       } catch (err) {
         console.error("Failed to update model config:", err);
       }
     },
-    [getSettingsConfig, handleSettingsConfigChange],
+    [getSettingsConfig, handleSettingsConfigChange, localApiFormat],
   );
 
   // Values used for submit-time validation must come from the current JSON
@@ -241,9 +259,11 @@ function ProviderFormFull({
     const raw = getSettingsConfig() || "{}";
     let parsedBaseUrl: string | null = null;
     try {
-      const parsed = JSON.parse(raw) as { env?: Record<string, unknown> };
-      const candidate = parsed.env?.ANTHROPIC_BASE_URL;
-      parsedBaseUrl = typeof candidate === "string" ? candidate.trim() : "";
+      const parsed = JSON.parse(raw);
+      parsedBaseUrl = readEnvValue(
+        parsed,
+        claudeConfigKeys(localApiFormat).baseUrlKeys,
+      ).trim();
     } catch {
       // The JSON validator will report malformed input; retain hook state for
       // the auxiliary checks until the user fixes it.
@@ -251,17 +271,73 @@ function ProviderFormFull({
     }
     return {
       baseUrl: parsedBaseUrl ?? baseUrl,
-      apiKey: parsedBaseUrl === null ? apiKey : getApiKeyFromConfig(raw, appId),
+      apiKey:
+        parsedBaseUrl === null
+          ? apiKey
+          : getApiKeyFromConfig(raw, appId, localApiFormat),
     };
-  }, [apiKey, appId, baseUrl, getSettingsConfig]);
+  }, [apiKey, appId, baseUrl, getSettingsConfig, localApiFormat]);
 
-  const [localApiFormat, setLocalApiFormat] = useState<ClaudeApiFormat>(() => {
-    return initialData?.meta?.apiFormat ?? "anthropic";
-  });
+  const handleApiFormatChange = useCallback(
+    (format: ClaudeApiFormat) => {
+      if (format === localApiFormat) return;
 
-  const handleApiFormatChange = useCallback((format: ClaudeApiFormat) => {
-    setLocalApiFormat(format);
-  }, []);
+      const previous = claudeConfigKeys(localApiFormat);
+      const next = claudeConfigKeys(format);
+      setLocalApiFormat(format);
+
+      try {
+        const config = JSON.parse(getSettingsConfig() || "{}");
+
+        // 地址：沿用原值，只换变量名
+        const previousBaseUrl = readEnvValue(config, previous.baseUrlKeys);
+        if (previousBaseUrl) {
+          writeEnvValue(
+            config,
+            next.baseUrlKeys,
+            previousBaseUrl,
+            ALL_CLAUDE_BASE_URL_KEYS,
+          );
+        }
+
+        // Key：沿用原值；Anthropic 目标遵循当前认证字段选择
+        const previousApiKey = readEnvValue(config, ALL_CLAUDE_API_KEY_KEYS);
+        if (previousApiKey) {
+          const apiKeyTargetKeys =
+            format === "anthropic" &&
+            localApiKeyField === "ANTHROPIC_API_KEY"
+              ? ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]
+              : next.apiKeyKeys;
+          writeEnvValue(
+            config,
+            apiKeyTargetKeys,
+            previousApiKey,
+            ALL_CLAUDE_API_KEY_KEYS,
+          );
+        }
+
+        // 模型：沿用原值，只换变量名
+        const previousModel = readEnvValue(config, ALL_CLAUDE_MODEL_KEYS);
+        writeEnvValue(
+          config,
+          next.modelKeys,
+          previousModel,
+          ALL_CLAUDE_MODEL_KEYS,
+        );
+        setModel(previousModel);
+
+        handleSettingsConfigChange(JSON.stringify(config, null, 2));
+      } catch (err) {
+        console.error("Failed to migrate config for api format:", err);
+      }
+    },
+    [
+      localApiFormat,
+      localApiKeyField,
+      getSettingsConfig,
+      handleSettingsConfigChange,
+    ],
+  );
 
   const handleApiKeyFieldChange = useCallback(
     (field: ClaudeApiKeyField) => {
@@ -448,6 +524,7 @@ function ProviderFormFull({
       apiFormat: category !== "official" ? localApiFormat : undefined,
       apiKeyField:
         category !== "official" &&
+        localApiFormat === "anthropic" &&
         localApiKeyField !== "ANTHROPIC_AUTH_TOKEN"
           ? localApiKeyField
           : undefined,
@@ -560,6 +637,7 @@ function ProviderFormFull({
           <CommonConfigEditor
             value={form.getValues("settingsConfig")}
             onChange={handleSettingsConfigChange}
+            apiFormat={localApiFormat}
           />
           {settingsConfigErrorField}
 

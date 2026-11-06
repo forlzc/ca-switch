@@ -360,13 +360,12 @@ describe("UsageDashboard", () => {
 
   it("draws the request log with the columns picked in settings", () => {
     renderDashboard({
-      usageDisplay: { currency: "CNY", requestLogColumns: { app: false } },
+      usageDisplay: { currency: "CNY", requestLogColumns: {} },
     });
 
     // 改过的列按设置走，没改过的按默认（新列默认不显示），时间列总在
     const columns = requestLogTableMock.mock.lastCall?.[0].columns;
     expect(columns).toContain("time");
-    expect(columns).not.toContain("app");
     expect(columns).not.toContain("statusCode");
   });
 

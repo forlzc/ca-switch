@@ -26,7 +26,6 @@ import {
   getResolvedLang,
   parseFiniteNumber,
 } from "./format";
-import { appDisplayName } from "./RequestLogTable";
 import { getUsageProviderLabel } from "./providerLabel";
 
 interface RequestDetailPanelProps {
@@ -99,11 +98,6 @@ function useDetailSections(request: RequestLog) {
       key: "time",
       label: t("usage.time"),
       value: new Date(request.createdAt * 1000).toLocaleString(locale),
-    },
-    {
-      key: "app",
-      label: t("usage.app"),
-      value: appDisplayName(request.appType),
     },
     {
       key: "provider",

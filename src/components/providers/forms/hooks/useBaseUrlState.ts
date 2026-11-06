@@ -1,10 +1,17 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import type { ProviderCategory } from "@/types";
+import type { ClaudeApiFormat, ProviderCategory } from "@/types";
+import {
+  ALL_CLAUDE_BASE_URL_KEYS,
+  claudeConfigKeys,
+  readEnvValue,
+  writeEnvValue,
+} from "@/config/claudeApiFormatConfig";
 
 interface UseBaseUrlStateProps {
   category: ProviderCategory | undefined;
   settingsConfig: string;
   onSettingsConfigChange: (config: string) => void;
+  apiFormat?: ClaudeApiFormat;
   /**
    * 现读当前配置。`settingsConfig` 是调用方在渲染期取的快照，可能早于别处
    * （如 JSON 编辑器）的写入。改 Base URL 时若基于旧快照重建整份 JSON，就会
@@ -14,16 +21,19 @@ interface UseBaseUrlStateProps {
 }
 
 /**
- * 管理 Anthropic 协议的 Base URL 状态（JSON 配置里的 env.ANTHROPIC_BASE_URL）。
+ * 管理上游 Base URL 状态。变量名跟随所选上游协议：Anthropic 用
+ * ANTHROPIC_BASE_URL，OpenAI 兼容协议用 OPENAI_BASE_URL；读取时兼容旧键。
  */
 export function useBaseUrlState({
   category,
   settingsConfig,
   onSettingsConfigChange,
+  apiFormat = "anthropic",
   getSettingsConfig,
 }: UseBaseUrlStateProps) {
   const [baseUrl, setBaseUrl] = useState("");
   const isUpdatingRef = useRef(false);
+  const { baseUrlKeys } = claudeConfigKeys(apiFormat);
 
   // 事件处理里一律走这里取配置：有 getter 用 getter（当前值），否则退回快照。
   const readSettingsConfig = useCallback(
@@ -38,15 +48,14 @@ export function useBaseUrlState({
 
     try {
       const config = JSON.parse(settingsConfig || "{}");
-      const envUrl: unknown = config?.env?.ANTHROPIC_BASE_URL;
-      const nextUrl = typeof envUrl === "string" ? envUrl.trim() : "";
+      const nextUrl = readEnvValue(config, baseUrlKeys).trim();
       if (nextUrl !== baseUrl) {
         setBaseUrl(nextUrl);
       }
     } catch {
       // ignore
     }
-  }, [category, settingsConfig, baseUrl]);
+  }, [category, settingsConfig, apiFormat, baseUrl, baseUrlKeys]);
 
   const handleClaudeBaseUrlChange = useCallback(
     (url: string) => {
@@ -56,10 +65,7 @@ export function useBaseUrlState({
 
       try {
         const config = JSON.parse(readSettingsConfig() || "{}");
-        if (!config.env) {
-          config.env = {};
-        }
-        config.env.ANTHROPIC_BASE_URL = sanitized;
+        writeEnvValue(config, baseUrlKeys, sanitized, ALL_CLAUDE_BASE_URL_KEYS);
         onSettingsConfigChange(JSON.stringify(config, null, 2));
       } catch {
         // ignore
@@ -69,7 +75,7 @@ export function useBaseUrlState({
         }, 0);
       }
     },
-    [readSettingsConfig, onSettingsConfigChange],
+    [readSettingsConfig, onSettingsConfigChange, baseUrlKeys],
   );
 
   return {

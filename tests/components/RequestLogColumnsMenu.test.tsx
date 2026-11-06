@@ -10,7 +10,7 @@ describe("RequestLogColumnsMenu", () => {
     const onChange = vi.fn().mockResolvedValue(true);
     render(
       <RequestLogColumnsMenu
-        value={{ currency: "CNY", requestLogColumns: { app: false } }}
+        value={{ currency: "CNY", requestLogColumns: {} }}
         onChange={onChange}
       />,
     );
@@ -30,7 +30,7 @@ describe("RequestLogColumnsMenu", () => {
     // 菜单不关，可以接着勾；保存时其它显示设置原样带上，只存改过的列
     expect(onChange).toHaveBeenLastCalledWith({
       currency: "CNY",
-      requestLogColumns: { app: false, statusCode: true },
+      requestLogColumns: { statusCode: true },
     });
     expect(
       screen.getByRole("menuitemcheckbox", { name: "usage.statusCode" }),
@@ -38,7 +38,14 @@ describe("RequestLogColumnsMenu", () => {
 
     // 勾回默认值的列不再写进设置
     await user.click(
-      screen.getByRole("menuitemcheckbox", { name: "usage.app" }),
+      screen.getByRole("menuitemcheckbox", { name: "usage.provider" }),
+    );
+    expect(onChange).toHaveBeenLastCalledWith({
+      currency: "CNY",
+      requestLogColumns: { statusCode: true, provider: false },
+    });
+    await user.click(
+      screen.getByRole("menuitemcheckbox", { name: "usage.provider" }),
     );
     expect(onChange).toHaveBeenLastCalledWith({
       currency: "CNY",

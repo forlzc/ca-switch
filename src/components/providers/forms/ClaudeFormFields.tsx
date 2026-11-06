@@ -274,7 +274,7 @@ export function ClaudeFormFields({
             <HelpTip title={apiFormatLabel}>
               {t("providerForm.apiFormatHelp", {
                 defaultValue:
-                  "看供应商原生支持哪种协议：Anthropic Messages 原样转发、不转换格式；其余三种由路由转成 Anthropic Messages。",
+                  "选择上游供应商实际提供的协议。代理会按入口客户端的协议自动决定是否转换（Anthropic、OpenAI Chat、OpenAI Responses、Gemini 四种格式互转）。",
               })}
             </HelpTip>
           </div>
@@ -285,22 +285,22 @@ export function ClaudeFormFields({
             <SelectContent>
               <SelectItem value="anthropic">
                 {t("providerForm.apiFormatAnthropic", {
-                  defaultValue: "Anthropic Messages (原生)",
+                  defaultValue: "Anthropic Messages",
                 })}
               </SelectItem>
               <SelectItem value="openai_chat">
                 {t("providerForm.apiFormatOpenAIChat", {
-                  defaultValue: "OpenAI Chat Completions (需转换)",
+                  defaultValue: "OpenAI Chat Completions",
                 })}
               </SelectItem>
               <SelectItem value="openai_responses">
                 {t("providerForm.apiFormatOpenAIResponses", {
-                  defaultValue: "OpenAI Responses API (需转换)",
+                  defaultValue: "OpenAI Responses API",
                 })}
               </SelectItem>
               <SelectItem value="gemini_native">
                 {t("providerForm.apiFormatGeminiNative", {
-                  defaultValue: "Gemini Native generateContent (需转换)",
+                  defaultValue: "Gemini Native generateContent",
                 })}
               </SelectItem>
             </SelectContent>

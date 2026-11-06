@@ -1,8 +1,16 @@
 // 供应商配置处理工具函数
 
-import type { CodexApiFormat } from "@/types";
+import type { ClaudeApiFormat, CodexApiFormat } from "@/types";
+import {
+  ALL_CLAUDE_API_KEY_KEYS,
+  claudeConfigKeys,
+  readEnvValue,
+} from "@/config/claudeApiFormatConfig";
 import { normalizeTomlText } from "@/utils/textNormalization";
 import { parse as parseToml } from "smol-toml";
+
+// Claude API 供应商历史上可能用过的 Key 字段，读取时全部兼容
+const CLAUDE_KNOWN_API_KEY_KEYS = ALL_CLAUDE_API_KEY_KEYS;
 
 const isPlainObject = (value: unknown): value is Record<string, any> => {
   return Object.prototype.toString.call(value) === "[object Object]";
@@ -31,6 +39,7 @@ export const validateJsonConfig = (
 export const getApiKeyFromConfig = (
   jsonString: string,
   appType?: string,
+  apiFormat?: ClaudeApiFormat,
 ): string => {
   try {
     const config = JSON.parse(jsonString);
@@ -70,16 +79,12 @@ export const getApiKeyFromConfig = (
       return typeof codexKey === "string" ? codexKey : "";
     }
 
-    // Claude API Key (优先 ANTHROPIC_AUTH_TOKEN，其次 ANTHROPIC_API_KEY)
-    const token = env.ANTHROPIC_AUTH_TOKEN;
-    const apiKey = env.ANTHROPIC_API_KEY;
-    const value =
-      typeof token === "string"
-        ? token
-        : typeof apiKey === "string"
-          ? apiKey
-          : "";
-    return value;
+    // Claude API Key：按当前上游协议的字段名读取，再兜底所有历史字段
+    const preferredKeys = claudeConfigKeys(apiFormat ?? "anthropic").apiKeyKeys;
+    return readEnvValue(
+      config,
+      [...preferredKeys, ...CLAUDE_KNOWN_API_KEY_KEYS],
+    );
   } catch (err) {
     return "";
   }
@@ -112,9 +117,8 @@ export const hasApiKeyField = (
       return Object.prototype.hasOwnProperty.call(env, "CODEX_API_KEY");
     }
 
-    return (
-      Object.prototype.hasOwnProperty.call(env, "ANTHROPIC_AUTH_TOKEN") ||
-      Object.prototype.hasOwnProperty.call(env, "ANTHROPIC_API_KEY")
+    return CLAUDE_KNOWN_API_KEY_KEYS.some((key) =>
+      Object.prototype.hasOwnProperty.call(env, key),
     );
   } catch (err) {
     return false;
@@ -129,9 +133,10 @@ export const setApiKeyInConfig = (
     createIfMissing?: boolean;
     appType?: string;
     apiKeyField?: string;
+    apiFormat?: ClaudeApiFormat;
   } = {},
 ): string => {
-  const { createIfMissing = false, appType, apiKeyField } = options;
+  const { createIfMissing = false, appType, apiKeyField, apiFormat } = options;
   try {
     const config = JSON.parse(jsonString);
 
@@ -183,7 +188,21 @@ export const setApiKeyInConfig = (
       return JSON.stringify(config, null, 2);
     }
 
-    // Claude API Key (优先写入已存在的字段；若两者均不存在且允许创建，则使用 apiKeyField 或默认 AUTH_TOKEN 字段)
+    // Claude API Key：按当前上游协议写入对应字段
+    if (apiFormat && apiFormat !== "anthropic") {
+      const { apiKeyKeys } = claudeConfigKeys(apiFormat);
+      if (createIfMissing || hasApiKeyField(JSON.stringify(config), appType)) {
+        for (const key of CLAUDE_KNOWN_API_KEY_KEYS) {
+          delete env[key];
+        }
+        env[apiKeyKeys[0]] = apiKey;
+      } else {
+        return jsonString;
+      }
+      return JSON.stringify(config, null, 2);
+    }
+
+    // Anthropic：优先写入已存在的字段；若两者均不存在且允许创建，则使用 apiKeyField 或默认 AUTH_TOKEN 字段
     if ("ANTHROPIC_AUTH_TOKEN" in env) {
       env.ANTHROPIC_AUTH_TOKEN = apiKey;
     } else if ("ANTHROPIC_API_KEY" in env) {

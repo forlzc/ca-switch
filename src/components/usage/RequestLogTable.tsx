@@ -97,27 +97,6 @@ export function formatLogFullTime(createdAt: number): string {
  * 入口协议名：日志里存的是历史入口标识，显示时归一到它对应的协议，
  * 不再出现任何具体客户端名称。
  */
-const APP_PROTOCOL_NAME: Record<string, string> = {
-  claude: "Anthropic",
-  "claude-desktop": "Anthropic",
-  codex: "OpenAI Responses",
-  grokbuild: "OpenAI Chat",
-  gemini: "Gemini",
-  opencode: "OpenAI Chat",
-  openclaw: "OpenAI Chat",
-  hermes: "OpenAI Chat",
-  pi: "OpenAI Chat",
-  omp: "OpenAI Chat",
-  mcode: "OpenAI Chat",
-  kimi: "OpenAI Chat",
-  dsh: "OpenAI Chat",
-  agy: "Anthropic",
-};
-
-export function appDisplayName(appType: string): string {
-  return APP_PROTOCOL_NAME[appType] ?? appType;
-}
-
 const isSuccessStatus = (code: number) => code >= 200 && code < 300;
 
 const DEFAULT_COLUMNS = resolveRequestLogColumns(undefined);
@@ -384,7 +363,7 @@ export function RequestLogTable({
       RequestLogColumnId,
       ReactElement<{ className?: string; style?: CSSProperties }>
     > = {
-      // 时间、应用两列收紧到内容宽度（w-px），多出来的宽度留给后面的数值列
+      // 时间列收紧到内容宽度（w-px），多出来的宽度留给后面的数值列
       time: (
         <td className={cn(usageTable.td, "w-px")}>
           <button
@@ -409,13 +388,6 @@ export function RequestLogTable({
               title={log.errorMessage}
             />
           )}
-        </td>
-      ),
-      app: (
-        <td className={cn(usageTable.td, "w-px")}>
-          <span title={appDisplayName(log.appType)}>
-            {appDisplayName(log.appType)}
-          </span>
         </td>
       ),
       // 供应商、模型按内容取宽、不截断：放不下时整张表横向滚动，不把列挤到看不全

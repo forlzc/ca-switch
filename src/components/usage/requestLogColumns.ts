@@ -1,11 +1,10 @@
 /**
  * 请求日志的列：顺序即表格从左到右的顺序。`locked` 的列不能关（时间列是打开详情的入口）。
- * 分四组：身份（时间 → 模型）、成本、Tokens、性能；`groupStart` 的列前面多留一段间距，靠间距分组不画线。
+ * 分三组：身份（时间 → 模型）、成本、Tokens、性能；`groupStart` 的列前面多留一段间距，靠间距分组不画线。
  * 设置里只存用户改过的列（id → 是否显示），没写的按这里的默认值；以后新加列不会被老用户的设置冻住。
  */
 export const REQUEST_LOG_COLUMNS = [
   { id: "time", labelKey: "usage.time", defaultVisible: true, locked: true },
-  { id: "app", labelKey: "usage.app", defaultVisible: true },
   { id: "provider", labelKey: "usage.provider", defaultVisible: true },
   { id: "model", labelKey: "usage.model", defaultVisible: true },
   {
@@ -83,20 +82,16 @@ export function requestLogGroupBreaks(
   );
 }
 
-const PINNABLE_LEADING: ReadonlySet<RequestLogColumnId> = new Set([
-  "time",
-  "app",
-]);
+const PINNABLE_LEADING: ReadonlySet<RequestLogColumnId> = new Set(["time"]);
 
 /**
- * 横向滚动时固定在左侧的列：前两列里是时间或应用的那几列，从第一列起连续地算
- * （时间、应用都在前两位就两列都固定；应用被关掉时只固定时间）。
+ * 横向滚动时固定在左侧的列：从第一列起连续可固定的列（目前只有时间列）。
  */
 export function requestLogPinnedStart(
   columns: RequestLogColumnId[],
 ): RequestLogColumnId[] {
   const pinned: RequestLogColumnId[] = [];
-  for (const id of columns.slice(0, 2)) {
+  for (const id of columns.slice(0, 1)) {
     if (!PINNABLE_LEADING.has(id)) break;
     pinned.push(id);
   }
