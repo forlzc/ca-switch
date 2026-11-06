@@ -1,19 +1,23 @@
-# caswitch 精简重构：进度与待办
+# caswitch 精简重构：进度与收尾记录
 
-> 更新时间：2026-11-05 16:49（GMT+8）
+> 更新时间：2026-11-06（GMT+8）
 > 仓库：`/workspace/cc-switch`　远端：`https://github.com/forlzc/cc-switch.git`
-> 分支：`caswitch` → **`ca-switch`**（已推送 `origin/ca-switch` @ `609f0d9c`）
-> 基线：tag `caswitch-base` / `origin/fork/build` (`bc4c4c45`)，本地领先 11 个提交
-> 工作区：干净
+> 分支：`ca-switch`
+> 最终口径：**单 API 入口、无任何具体客户端功能、通用图标**
+> 工作区：收尾完成后干净
 
 ---
 
 ## 1. 一句话现状
 
-P0–P2 的 2a、2b、2e、2d、2b-2 与 **2c** 已落地；**P3、P4 完成**；**P5 改名完成**。
-**2f 只剩两件事**：删除 5 张下线表（需同步调整 prompt/live-backup 路径与备份测试）、
-清理约 175 条 `dead_code` 警告。当前后端 `cargo check --all-targets` 0 error，
-前端 `pnpm typecheck` 与 `pnpm build:renderer` 均通过。
+**项目已完成通用 API 代理收敛。** 后端 `AppType` 只剩 `Claude` 一个变体，前端只剩一个显示为「API」的入口；
+Claude 插件、onboarding、官方账号额度、模型映射、Stack、编辑器投影、Claude Desktop、Prompt/CLAUDE.md、
+MCP/Skills 槽位均已删除。13 个其他 app 的配置模块与命令已清除，5 张下线表通过 schema v28 迁移 DROP，
+后端 `dead_code` 从 175 条降到 0。当前后端 `cargo check` 0 error / 0 warning，`cargo test` 全通过；
+前端 `pnpm typecheck`、`pnpm vitest run`、`pnpm build:renderer` 均通过。
+
+> 原 §6.2 的「前端四入口」方案已被最终口径取代：只保留一个 API 入口，协议由供应商侧 `apiFormat` 下拉选择。
+> 详见 §11。
 
 ---
 
@@ -135,7 +139,7 @@ cargo test --lib --offline database::backup -- --test-threads=1
 - 501 文案统一由 `Matrix::unsupported_message` 生成（`ProtocolUnsupported` → HTTP 501）。
 - 单测：`failover_chain_stops_at_a_different_protocol` 等 4 条。
 
-### 6.2 2f — 前端四入口 + 收尾清理
+### 6.2 2f — 前端收尾清理（原「四入口」方案已被 §11 的单 API 入口取代）
 
 - 前端改造清单见 `caswitch-精简重构规划.md` §六；四条 base URL + 配置片段**只展示不写文件**，配复制按钮
 - 清理大删除后残留的 **约 241 处 `dead_code` 警告**（`codex_config.rs` 占 79 处，全是 Stack / 官方模型目录 / CLI 候选符号）
@@ -198,10 +202,10 @@ cargo test --lib --offline database::backup -- --test-threads=1
 
 | 项 | 说明 | 处置 |
 |---|---|---|
-| 175 条 `dead_code` 警告 | 大删除后残留，不阻塞编译 | 2f 清理（`session_manager`、`codex_config` 仍被用量/订阅引用，需逐项删） |
+| 175 条 `dead_code` 警告 | 大删除后残留，不阻塞编译 | **已闭环**：最终 0 error / 0 warning，见 §11 |
 | 基线偶发失败 | `hyper_client::bytes_with_limit_*` | 本轮全绿，保留为已知偶发 |
 | `app_type` / `is_current` 兼容列 | v25 有意保留，DAO 用 `?N = ?N` 恒真条件保持签名不变 | 2f 后统一收敛 |
-| 5 张已下线表 | v25 未删 | 2f 删 |
+| 5 张已下线表 | v25 未删 | **已闭环**：schema v28 迁移 DROP，见 §11 |
 | 前端构建 | 已通过 `typecheck` + `build:renderer` | 已闭环 |
 | 命名口径 | 已确认统一为 `ca-switch`（分支 / 包 / crate / 目录 / identifier） | 已闭环 |
 | 远程分支策略 | 已推送 `origin/ca-switch` @ `609f0d9c`（14 个提交）；`origin/fork/build` 未改动 | 见下方「推送记录」 |
@@ -329,9 +333,63 @@ cd .. && pnpm build          # 2f 时
 - **验证**：`pnpm typecheck` 通过；`pnpm vitest run tests/components tests/integration`
   67 文件 / 443 用例通过；`pnpm build:renderer` 通过。
 
-仍然存在（后续）：
+上述两项已在 §11 完成：
 
-- `src/config/*ProviderPresets.ts` 仍保留内置预设数据（不再被任何 UI 渲染）；下一步可整体删除，
-  并把 `AppId` 收敛为单一 `"claude"` 入口。
-- 后端 `AppType` / `*_config.rs` / deeplink / 托盘其它文案仍含 agent 名，见 10.4。
+- 预设数据已删除，`AppId` 已收敛为单一 `"claude"`（对外显示「API」）。
+- 后端 `AppType` 已收敛为单变体，`*_config.rs`、deeplink、托盘中的其他 agent 文案已清理。
+
+---
+
+## 11. 最终收尾（2026-11-06）
+
+### 11.1 最终产品口径
+
+- 软件只保留**一个入口**，显示名「API」，协议由供应商配置里的「上游格式」下拉选择：
+  `anthropic` / `openai_chat` / `openai_responses` / `gemini_native`。
+- 不出现任何具体 agent/客户端功能或品牌；图标统一使用通用服务器图标，Claude 图标已删除。
+- 供应商配置保留：Key、地址、完整 URL、认证字段、上游协议、思考档位、UA/请求覆盖，以及
+  从服务商 `/models` 拉取后**直选一个模型**（不再有多档模型映射）。
+
+### 11.2 前端完成项
+
+- `AppId` 收敛为 `"claude"`，`APP_IDS` 只有一项，显示名统一为「API」。
+- 删除 Claude 插件联动、onboarding、配置目录、live 直写、官方账号额度、编辑器投影、
+  MCP/Skills/记忆槽位、Claude Code 模型映射与 Stack/聚合发布。
+- 删除 `BrandIcons.tsx`、`types/omo.ts`、`tomlUtils.ts`、`skillErrorParser.ts` 等无引用模块。
+- 删除接管/路由目标/恢复式停止/默认导入等指向不存在后端命令的死封装；
+  `useModeActions`、路由切换提示及测试一并删除。
+- i18n：删除 `claudeConfig`、`providerPreset` 等整段命名空间与 100+ 条 Claude 历史键，
+  以及后续无引用的 `mcp`、`skills`、`omo`；`apps` 只保留 `claude: "API"`。
+
+### 11.3 后端完成项
+
+- `AppType` 只剩 `Claude`（`"claude"`，兼容 `"anthropic"`）；13 个其他 app 的 `*_config.rs`、
+  命令、服务、OAuth/托管账号、订阅额度、托盘/深链/数据库种子全部删除。
+- 删除 Prompt/CLAUDE.md 子系统：`prompt.rs`、`prompt_files.rs`、`services/prompt.rs`、
+  `deeplink/prompt.rs`、`dao/prompts.rs` 及 profile/sync/import_export 引用。
+- 删除 Claude Desktop 残留（`claude_desktop_mode`、`claude_desktop_model_routes`）、
+  Claude/Codex OAuth 用量缓存、编辑器投影命令 `get_provider_editor_view`。
+- `dead_code` / 未使用变量警告从 64 条降至 **0**，未使用 `#[allow(dead_code)]`。
+- schema **v28**：新增 `migrate_v27_to_v28`，逐表 `DROP TABLE IF EXISTS` 删除
+  `mcp_servers`、`skills`、`skill_repos`、`prompts`、`proxy_live_backup`；
+  新建数据库不再创建这些表，备份/同步清单同步移除。
+- 保留通用代理核心：协议转换、路由、故障转移、用量统计、余额/套餐、模型拉取、测速、
+  自定义端点、供应商快照、备份/WebDAV/S3、环境检测、自动启动、托盘基础功能。
+
+### 11.4 验证基线
+
+| 项 | 结果 |
+|---|---|
+| `cargo +1.94.1 check` | **0 error / 0 warning** |
+| `cargo +1.94.1 test --lib` | **1648 passed / 0 failed / 4 ignored** |
+| `cargo +1.94.1 test --tests` | **3 passed / 0 failed** |
+| `pnpm typecheck` | **通过** |
+| `pnpm vitest run` | **120 文件 / 787 用例通过** |
+| `pnpm build:renderer` | **通过** |
+
+### 11.5 仍未做（非代码完成项）
+
+- 真实上游的手工连通验证（需实际 Key 与网络）。
+- ja / tr / zh-TW 语言包存在历史翻译缺口（键数少于 zh/en），与本次删除无关，不影响运行。
+- 少量历史迁移函数保留旧表重建逻辑，已用 `table_exists` 守卫；旧库升级到 v28 后五表会被删除。
 
