@@ -18,6 +18,8 @@ MCP/Skills 槽位均已删除。13 个其他 app 的配置模块与命令已清�
 
 > 原 §6.2 的「前端四入口」方案已被最终口径取代：只保留一个 API 入口，协议由供应商侧 `apiFormat` 下拉选择。
 > 详见 §11。
+>
+> 2026-11-06 追加：协议矩阵补齐（Chat×Anthropic）与真实上游验证，详见 §12；该轮改动尚在工作区，未提交。
 
 ---
 
@@ -125,10 +127,13 @@ cargo test --lib --offline database::backup -- --test-threads=1
    `claude→Anthropic`、`codex→OpenAiResponses`、`grokbuild→OpenAiChat`、`gemini→Gemini`
 2. `proxy/forwarder.rs` 读激活供应商的 `protocol` 列，调 `Matrix::plan(inbound, upstream)`
 3. `Passthrough` 直转；`Convert` 走已有转换器；`Unsupported` 返回 **501** + 中文可读文案
-   （例："当前供应商为 Gemini 协议，OpenAI Chat 入口不支持，请改用 Claude Code 入口或切换供应商"）
-4. 钉死矩阵断言：**4 透传 + 6 转换 + 6 不支持**（`protocol.rs` 已有覆盖测试，确认口径一致）
+   （实际文案由 `Matrix::unsupported_message` 生成："当前入口使用 … 协议，激活的供应商是 … 协议，
+   两者之间没有可用的转换器。请切换供应商，或改用与该供应商协议匹配的入口。"）
+4. 钉死矩阵断言：**4 透传 + 7 转换 + 5 不支持**（`protocol.rs` 已有覆盖测试，确认口径一致；
+   `Chat→Anthropic` 在 2026-11-06 补齐，见 §12）
 5. 顺带落实 C′：故障转移换供应商时校验协议相同
-6. **验收**：四条入口 × 对应上游各手工连通一次；7 个空白格全部 501 且文案可读
+6. **验收**：四条入口 × 对应上游各手工连通一次；5 个空白格全部 501 且文案可读
+   （2026-11-06：9 格已用真实上游连通，5 个 501 格已自动化验证，见 §12）
 
 ### 6.1 2c 完成记录（2026-11-05）
 
@@ -169,6 +174,8 @@ cargo test --lib --offline database::backup -- --test-threads=1
 - `forwarder` 改 endpoint（`/chat/completions`→`/responses`，含完整 base URL 形态）与 body；
   `handle_chat_completions` 按供应商协议把 JSON / SSE 响应转回 Chat。
 - 覆盖文本、图片、工具调用、推理摘要、usage、错误事件。
+- 2026-11-06 追加：`Chat→Anthropic` 直连转换（`transform_chat_anthropic.rs`）补齐，矩阵变为
+  7 转换 / 5 不支持；两格均通过真实上游验证，见 §12。
 
 ### 6.5 P5 — 改名与收尾（改名已完成）
 
@@ -381,7 +388,7 @@ cd .. && pnpm build          # 2f 时
 | 项 | 结果 |
 |---|---|
 | `cargo +1.94.1 check` | **0 error / 0 warning** |
-| `cargo +1.94.1 test --lib` | **1648 passed / 0 failed / 4 ignored** |
+| `cargo +1.94.1 test --lib` | **1654 passed / 0 failed / 6 ignored**（2026-11-06 更新，含新增协议验证用例） |
 | `cargo +1.94.1 test --tests` | **3 passed / 0 failed** |
 | `pnpm typecheck` | **通过** |
 | `pnpm vitest run` | **120 文件 / 787 用例通过** |
@@ -389,7 +396,76 @@ cd .. && pnpm build          # 2f 时
 
 ### 11.5 仍未做（非代码完成项）
 
-- 真实上游的手工连通验证（需实际 Key 与网络）。
+- 真实上游连通验证：2026-11-06 已完成 9 格（Anthropic / Chat / Responses 三种上游 × 三种入口），
+  剩余 2 格需要 Gemini 上游 Key（`Anthropic→Gemini` 转换、`Gemini→Gemini` 直通），见 §12。
 - ja / tr / zh-TW 语言包存在历史翻译缺口（键数少于 zh/en），与本次删除无关，不影响运行。
 - 少量历史迁移函数保留旧表重建逻辑，已用 `table_exists` 守卫；旧库升级到 v28 后五表会被删除。
+
+---
+
+## 12. 协议矩阵补齐与真实上游验证（2026-11-06，待提交）
+
+### 12.1 本轮目标
+
+原 CC Switch 没有 `Chat 入口 × Anthropic 上游` 这一格，`Chat 入口 × Responses 上游` 也只在
+P4 之后可用。本轮把两格都做成直连转换，并用真实上游逐格验证「入口协议 → 上游协议 → 响应形状」。
+
+### 12.2 最终矩阵（16 格）
+
+| 入口 ＼ 上游 | Anthropic | OpenAI Chat | OpenAI Responses | Gemini |
+|---|---|---|---|---|
+| Anthropic | 直通 | 转换 | 转换 | 转换 |
+| OpenAI Chat | **转换（本轮）** | 直通 | 转换（P4） | 501 |
+| OpenAI Responses | 转换 | 转换 | 直通 | 501 |
+| Gemini | 501 | 501 | 501 | 直通 |
+
+口径：**4 透传 + 7 转换 + 5 不支持**，与 `protocol.rs` 的 `matrix_covers_exactly_seven_cells` 一致。
+
+### 12.3 新增/修改文件
+
+| 文件 | 内容 |
+|---|---|
+| `providers/transform_chat_anthropic.rs`（新增） | Chat ⇄ Anthropic 直连：system / 图片 / 工具定义 / `tool_use`+`tool_result` 历史 / 合并同角色消息 / SSE / usage / 错误体 |
+| `providers/transform_chat_responses.rs`（P4 已有） | Chat → Responses 请求方向 |
+| `providers/streaming_responses_chat.rs`（P4 已有） | Responses → Chat JSON / SSE |
+| `protocol.rs` | 矩阵补 `(OpenAiChat, Anthropic)`，注释与测试同步 |
+| `proxy/forwarder.rs` | 新增 `chat_to_anthropic` 判定：endpoint、body、Accept、指纹头、identity 编码 |
+| `proxy/handlers.rs` | `handle_chat_completions` 按供应商协议分派，Chat←Anthropic 响应转换 |
+| `proxy/error_mapper.rs` | `ProtocolUnsupported → 501` |
+| `proxy/server.rs` | 三条真实/半真实验证用例（见 §12.4） |
+
+### 12.4 验证用例
+
+| 用例 | 覆盖 | 结果 |
+|---|---|---|
+| `real_upstream_protocol_matrix`（`#[ignore]`，需真 Key） | 3 入口 × 3 上游 × 流式/非流式，共 18 个请求；校验状态码 **和** 响应/SSE 形状 | 18/18 通过 |
+| `real_upstream_chat_client_responses_provider`（`#[ignore]`） | Chat×Responses 工具调用、多轮 `tool` 回传、流式工具分块与 usage | 通过 |
+| `unsupported_protocol_cells_return_501_with_readable_message`（常规用例，无网络） | 按 `Matrix::unsupported_cells()` 逐格断言 501 + 中文文案 | 5/5 通过 |
+
+运行方式：
+
+```bash
+cd src-tauri
+E2E_UPSTREAM_API_KEY=... E2E_UPSTREAM_BASE_URL=https://bailucode.com/openapi/v1 \
+E2E_UPSTREAM_MODEL=bailu-2.7 E2E_UPSTREAM_PROXY=http://127.0.0.1:18080 \
+cargo +1.94.1 test --lib real_upstream -- --ignored --nocapture
+```
+
+实测结论：9 格（Anthropic / Chat / Responses 上游 × 三种入口）全部 200 且响应形状与入口协议一致；
+新增的 `Chat×Anthropic` 与 `Chat×Responses` 工具调用均正常。Gemini 两格（`Anthropic→Gemini`、
+`Gemini→Gemini`）缺 Gemini Key，尚未真实验证。
+
+### 12.5 基线 tag 补齐
+
+文档原记载的 `caswitch-base`（重构前基线）此前不存在，现已在 `bc4c4c45`
+（`Merge branch 'farion1231:main' into fork/build`，即 `cee21206` 之前）补打：
+
+```bash
+git tag -a caswitch-base bc4c4c45 -m "caswitch 重构前基线（fork/build 合并点，cee21206 之前）"
+```
+
+### 12.6 状态
+
+本轮改动落在 7 个代码文件（新增 `transform_chat_anthropic.rs`）加本进度文档，尚未提交；
+本地 `ca-switch` 领先 `origin/ca-switch` 13 个提交，均未推送。
 
