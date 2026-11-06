@@ -418,7 +418,7 @@ P4 之后可用。本轮把两格都做成直连转换，并用真实上游逐�
 
 ### 12.2 最终矩阵（16 格）
 
-| 入口 ＼ 上游 | Anthropic | OpenAI Chat | OpenAI Responses | Gemini |
+| 上游 ＼ 入口 | Anthropic | OpenAI Chat | OpenAI Responses | Gemini |
 |---|---|---|---|---|
 | Anthropic | 直通 | 转换 | 转换 | 转换 |
 | OpenAI Chat | **转换（本轮）** | 直通 | 转换（P4） | 501 |

@@ -35,11 +35,9 @@ CA Switch 是一个本地协议网关：把 **Anthropic / OpenAI Chat / OpenAI R
 
 ## 转换矩阵
 
-读法是「入口协议（行）→ 上游协议（列）」：先看请求从哪条入口进来，再看当前激活供应商配置的上游格式，交叉得到处理方式。上游协议在供应商的「上游格式」中手动选择，客户端不需要任何配置。
+行是入口协议（客户端连进来的路径），列是当前激活供应商的上游协议。上游协议在供应商的「上游格式」中手动选择，客户端不需要做任何配置。
 
-这张表**不对称**：Anthropic 入口可以转换到全部三种上游，而 Gemini 入口没有向外的转换器，只能对接 Gemini 上游；反方向（例如 Gemini 客户端配 Anthropic 供应商）会返回 `501`。
-
-| 入口 \ 上游 | Anthropic Messages | OpenAI Chat | OpenAI Responses | Gemini |
+| 上游 \ 入口 | Anthropic Messages | OpenAI Chat | OpenAI Responses | Gemini |
 |---|---|---|---|---|
 | Anthropic Messages | 透传 | 转换 | 转换 | 转换 |
 | OpenAI Chat | 转换 | 透传 | 转换 | `501` |
