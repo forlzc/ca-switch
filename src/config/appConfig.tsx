@@ -1,11 +1,8 @@
-import type { ReactNode } from "react";
 import type { AppId } from "@/lib/api/types";
 import type { VisibleApps } from "@/types";
-import { ClaudeIcon } from "@/components/BrandIcons";
 
 export interface AppConfig {
   label: string;
-  icon: ReactNode;
   activeClass: string;
   badgeClass: string;
 }
@@ -42,7 +39,6 @@ export function isModeAppId(appId: string): appId is ModeAppId {
 export const APP_ICON_MAP: Record<AppId, AppConfig> = {
   claude: {
     label: "API",
-    icon: <ClaudeIcon size={14} />,
     activeClass:
       "bg-orange-500/10 ring-1 ring-orange-500/20 hover:bg-orange-500/20 text-orange-600 dark:text-orange-400",
     badgeClass:

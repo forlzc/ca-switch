@@ -2,6 +2,7 @@ import React from "react";
 import { HoverTip } from "@/components/ui/hover-tip";
 import type { AppId } from "@/lib/api/types";
 import { APP_IDS, APP_ICON_MAP } from "@/config/appConfig";
+import { AppGlyph } from "@/components/shell/AppGlyph";
 
 interface AppToggleGroupProps {
   apps: Partial<Record<AppId, boolean>>;
@@ -19,7 +20,7 @@ export const AppToggleGroup: React.FC<AppToggleGroupProps> = ({
   return (
     <div className="flex items-center gap-1.5 flex-shrink-0">
       {appIds.map((app) => {
-        const { label, icon, activeClass } = APP_ICON_MAP[app];
+        const { label, activeClass } = APP_ICON_MAP[app];
         const enabled = apps[app];
         return (
           <HoverTip
@@ -37,7 +38,7 @@ export const AppToggleGroup: React.FC<AppToggleGroupProps> = ({
                 enabled ? activeClass : "opacity-35 hover:opacity-70"
               } disabled:cursor-not-allowed`}
             >
-              {icon}
+              <AppGlyph size={14} />
             </button>
           </HoverTip>
         );
