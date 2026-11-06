@@ -2894,24 +2894,6 @@
       "restartRequired": "Restart routing service for address or port changes to take effect"
     },
     "switchFailed": "Switch failed: {{error}}",
-    "takeover": {
-      "ariaLabel": "{{appLabel}} local routing",
-      "hint": "Select apps to route — once enabled, requests from that app will go through local routing",
-      "enabled": "{{app}} routing enabled",
-      "disabled": "{{app}} routing disabled",
-      "failed": "Failed to toggle routing: {{detail}}",
-      "tooltip": {
-        "active": "{{appLabel}} is routing - {{address}}:{{port}}\nSwitching providers changes the route only; the direct provider stays",
-        "broken": "{{appLabel}} is routing, but routing service is not running",
-        "inactive": "Route {{appLabel}}'s requests through local routing"
-      }
-    },
-    "stackMode": {
-      "enabled": "{{app}} is now in Aggregation mode",
-      "exitedToDirect": "{{apps}} switched back to direct",
-      "ariaLabel": "{{appLabel}} Aggregation mode",
-      "failoverUnavailable": "{{appLabel}} is in Aggregation mode, which has no failover. The queue and settings are kept and apply again in routing mode"
-    },
     "failover": {
       "proxyRequired": "Routing service must be started to configure failover",
       "autoSwitch": "Auto Failover",
@@ -2981,9 +2963,7 @@
       "startFailed": "Failed to start routing service: {{detail}}",
       "stopped": "Routing service stopped",
       "stopFailed": "Failed to stop routing service: {{detail}}"
-    },
-    "stoppedWithRestore": "Routing service stopped; all apps are back on direct connections",
-    "stopWithRestoreFailed": "Stop failed: {{detail}}"
+    }
   },
   "streamCheck": {
     "reachable": "{{providerName}} is reachable ({{responseTimeMs}}ms)",
@@ -3284,21 +3264,6 @@
       "startService": "Start service",
       "backToDirect": "Back to direct",
       "attachFailed": "{{mode}} couldn't reconnect last time, so {{app}} went back to direct."
-    },
-    "toast": {
-      "enteredRoute": "{{app}} is now routing → {{provider}}.",
-      "enteredStack": "{{app}} switched to Aggregation. Restart {{app}} to see the aggregated models in /model.",
-      "enteredStackLive": "{{app}} switched to Aggregation. The aggregated models are now in /model.",
-      "enteredStackDesktop": "{{app}} switched to Aggregation. Restart {{app}} to see the aggregated models in its model list.",
-      "exited": "Back to direct: {{app}} now connects to {{provider}} directly.",
-      "routeRemembered": "Provider {{provider}} saved for when the client connects through routing or aggregation.",
-      "routeTargetChanged": "Route target set to {{provider}}.",
-      "routeSwitched": "Route switched to {{provider}}. New requests will use this provider.",
-      "stackDefaultChanged": "Aggregation default set to {{provider}}. Selected aggregated models still use their respective providers.",
-      "clientConfigChanged": " Client configuration also changed. Restart {{app}} to load the updated configuration.",
-      "defaultRemembered": "{{provider}} will be the default provider once you switch to Aggregation.",
-      "restartHint": " Restart {{app}} to apply.",
-      "failed": "Couldn't switch: {{detail}}"
     },
     "dialog": {
       "routeTitle": "Use routing for {{app}}?",

@@ -2840,24 +2840,6 @@
       "restartRequired": "Adres veya bağlantı noktası değişikliklerinin etkili olması için yönlendirme hizmetini yeniden başlatın"
     },
     "switchFailed": "Geçiş başarısız oldu: {{error}}",
-    "takeover": {
-      "ariaLabel": "{{appLabel}} yerel yönlendirme",
-      "hint": "Yönlendirilecek uygulamaları seçin — etkinleştirildiğinde, söz konusu uygulamadan gelen istekler yerel yönlendirme üzerinden iletilecektir",
-      "enabled": "{{app}} yönlendirme etkin",
-      "disabled": "{{app}} yönlendirme devre dışı",
-      "failed": "Yönlendirme değiştirilemedi: {{detail}}",
-      "tooltip": {
-        "active": "{{appLabel}} yönlendiriyor - {{address}}:{{port}}\nSağlayıcıları değiştirmek yalnızca rotayı değiştirir; doğrudan sağlayıcı kalır",
-        "broken": "{{appLabel}} yönlendirme yapıyor ancak yönlendirme hizmeti çalışmıyor",
-        "inactive": "{{appLabel}}'nin isteklerini yerel yönlendirme yoluyla yönlendirin"
-      }
-    },
-    "stackMode": {
-      "enabled": "{{app}} artık Birleştirme modunda",
-      "exitedToDirect": "{{apps}} direkt moda geri döndü",
-      "ariaLabel": "{{appLabel}} Birleştirme modu",
-      "failoverUnavailable": "{{appLabel}}, yedek sağlayıcıya geçiş özelliği olmayan Birleştirme modundadır. Kuyruk ve ayarlar korunur ve yönlendirme modunda tekrar uygulanır"
-    },
     "failover": {
       "proxyRequired": "Yedek sağlayıcıya geçişyi yapılandırmak için yönlendirme hizmeti başlatılmalıdır",
       "autoSwitch": "Otomatik yedek sağlayıcıya geçiş",
@@ -2927,9 +2909,7 @@
       "startFailed": "Yönlendirme hizmeti başlatılamadı: {{detail}}",
       "stopped": "Yönlendirme hizmeti durduruldu",
       "stopFailed": "Yönlendirme hizmeti durdurulamadı: {{detail}}"
-    },
-    "stoppedWithRestore": "Yönlendirme hizmeti durduruldu; tüm uygulamalar doğrudan bağlantılara geri döndü",
-    "stopWithRestoreFailed": "Durdurma başarısız oldu: {{detail}}"
+    }
   },
   "streamCheck": {
     "reachable": "{{providerName}}'ye ulaşılabilir ({{responseTimeMs}}ms)",
@@ -3229,21 +3209,6 @@
       "startService": "Hizmeti başlat",
       "backToDirect": "Doğrudan bağlantıya dön",
       "attachFailed": "{{mode}} önceki başlangıçta yeniden bağlanamadığı için {{app}} doğrudan bağlantıya döndü."
-    },
-    "toast": {
-      "enteredRoute": "{{app}} artık yönlendirme yapıyor → {{provider}}.",
-      "enteredStack": "{{app}}, Birleştirme moduna geçti. Birleştirilen modelleri /model içinde görmek için {{app}} uygulamasını yeniden başlatın.",
-      "enteredStackLive": "{{app}}, Birleştirme moduna geçti. Birleştirilen modeller artık /model içinde.",
-      "enteredStackDesktop": "{{app}} Birleştirme moduna geçti. Birleştirilmiş modelleri model listesinde görmek için {{app}} uygulamasını yeniden başlatın.",
-      "exited": "Direkt olarak geri dön: {{app}} artık doğrudan {{provider}}'ye bağlanıyor.",
-      "routeRemembered": "{{provider}} sağlayıcısı, istemci Yönlendirme veya Birleştirme üzerinden bağlandığında kullanılmak üzere kaydedildi.",
-      "routeTargetChanged": "Yönlendirme hedefi {{provider}} olarak ayarlandı.",
-      "routeSwitched": "Yönlendirme {{provider}} sağlayıcısına geçirildi. Yeni istekler bu sağlayıcıyı kullanacak.",
-      "stackDefaultChanged": "Birleştirme varsayılanı {{provider}} olarak ayarlandı. Seçili birleştirilmiş modeller kendi sağlayıcılarını kullanmaya devam eder.",
-      "clientConfigChanged": " İstemci yapılandırması da değişti. Güncel yapılandırmayı yüklemek için {{app}} uygulamasını yeniden başlatın.",
-      "defaultRemembered": "Birleştirme'ya geçtiğinizde {{provider}} varsayılan sağlayıcı olacaktır.",
-      "restartHint": "Uygulamak için {{app}}'yi yeniden başlatın.",
-      "failed": "Geçiş yapılamadı: {{detail}}"
     },
     "dialog": {
       "routeTitle": "{{app}} için yönlendirme kullanılsın mı?",

@@ -2883,24 +2883,6 @@
       "restartRequired": "修改位址或連接埠後需要重新啟動路由服務才能生效"
     },
     "switchFailed": "切換失敗：{{error}}",
-    "takeover": {
-      "ariaLabel": "{{appLabel}} 本地路由",
-      "hint": "選擇要路由的應用程式，啟用後該應用程式的請求將透過本地路由轉發",
-      "enabled": "{{app}} 路由已啟用",
-      "disabled": "{{app}} 路由已關閉",
-      "failed": "切換路由狀態失敗：{{detail}}",
-      "tooltip": {
-        "active": "{{appLabel}} 路由中 - {{address}}:{{port}}\n切換供應商只改路由，直連供應商不變",
-        "broken": "{{appLabel}} 路由中，但路由服務未執行",
-        "inactive": "路由 {{appLabel}} 的請求，讓該應用程式請求走本地路由"
-      }
-    },
-    "stackMode": {
-      "enabled": "{{app}} 已進入聚合模式",
-      "exitedToDirect": "{{apps}} 已退回直連",
-      "ariaLabel": "{{appLabel}} 聚合模式",
-      "failoverUnavailable": "{{appLabel}} 在聚合模式下不做故障轉移。佇列和設定保留，回到路由模式後恢復"
-    },
     "failover": {
       "proxyRequired": "需要先啟動路由服務才能設定故障轉移",
       "autoSwitch": "自動故障轉移",
@@ -2970,9 +2952,7 @@
       "startFailed": "啟動路由服務失敗：{{detail}}",
       "stopped": "路由服務已停止",
       "stopFailed": "停止路由服務失敗：{{detail}}"
-    },
-    "stoppedWithRestore": "路由服務已關閉，所有應用程式已退回直連",
-    "stopWithRestoreFailed": "停止失敗：{{detail}}"
+    }
   },
   "streamCheck": {
     "reachable": "{{providerName}} 連通正常 ({{responseTimeMs}}ms)",
@@ -3273,21 +3253,6 @@
       "startService": "啟動服務",
       "backToDirect": "回到直連",
       "attachFailed": "上次的{{mode}}模式沒能接上，{{app}} 已回到直連。"
-    },
-    "toast": {
-      "enteredRoute": "{{app}} 已開始路由 → {{provider}}。",
-      "enteredStack": "{{app}} 已切換到聚合模式。重新啟動 {{app}} 後，聚合的模型會出現在 /model 裡。",
-      "enteredStackLive": "{{app}} 已切換到聚合模式，聚合的模型已出現在 /model 裡。",
-      "enteredStackDesktop": "{{app}} 已切換到聚合模式。重新啟動 {{app}} 後，聚合的模型會出現在模型清單裡。",
-      "exited": "已回到直連：{{app}} 現在直接連線 {{provider}}。",
-      "routeRemembered": "已記住供應商 {{provider}}，用戶端接入路由或聚合後使用。",
-      "routeTargetChanged": "路由目標已設為 {{provider}}。",
-      "routeSwitched": "路由已切換至 {{provider}}，後續新請求將使用此供應商。",
-      "stackDefaultChanged": "聚合預設供應商已設為 {{provider}}；已選聚合模型仍使用各自的供應商。",
-      "clientConfigChanged": "用戶端設定也已更新；重新啟動 {{app}} 以載入更新後的設定。",
-      "defaultRemembered": "切換到聚合模式後，預設供應商是 {{provider}}。",
-      "restartHint": "重新啟動 {{app}} 後生效。",
-      "failed": "切換失敗：{{detail}}"
     },
     "dialog": {
       "routeTitle": "讓 {{app}} 使用路由模式？",

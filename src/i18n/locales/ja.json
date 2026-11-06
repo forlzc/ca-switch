@@ -2882,24 +2882,6 @@
       "restartRequired": "アドレスまたはポートの変更を反映するにはルーティングサービスの再起動が必要です"
     },
     "switchFailed": "切り替えに失敗しました: {{error}}",
-    "takeover": {
-      "ariaLabel": "{{appLabel}} ローカルルーティング",
-      "hint": "ルーティングするアプリを選択します。有効にすると、そのアプリのリクエストはローカルルーティング経由で転送されます",
-      "enabled": "{{app}} ルーティング有効",
-      "disabled": "{{app}} ルーティング無効",
-      "failed": "ルーティングの切り替えに失敗しました: {{detail}}",
-      "tooltip": {
-        "active": "{{appLabel}} がルーティング中 - {{address}}:{{port}}\nプロバイダを切り替えるとルートだけが変わり、直接接続のプロバイダはそのままです",
-        "broken": "{{appLabel}} がルーティング中ですが、ルーティングサービスが実行されていません",
-        "inactive": "{{appLabel}} のリクエストをローカルルーティング経由でルーティング"
-      }
-    },
-    "stackMode": {
-      "enabled": "{{app}} を集約モードにしました",
-      "exitedToDirect": "{{apps}} を直接接続に戻しました",
-      "ariaLabel": "{{appLabel}} の集約モード",
-      "failoverUnavailable": "{{appLabel}} は集約モードのため、フェイルオーバーは行いません。キューと設定は保持され、ルーティングモードに戻すと再び有効になります"
-    },
     "failover": {
       "proxyRequired": "フェイルオーバーを設定するには、ルーティングサービスを先に起動する必要があります",
       "autoSwitch": "自動フェイルオーバー",
@@ -2969,9 +2951,7 @@
       "startFailed": "ルーティングサービスの開始に失敗しました: {{detail}}",
       "stopped": "ルーティングサービスが停止しました",
       "stopFailed": "ルーティングサービスの停止に失敗しました: {{detail}}"
-    },
-    "stoppedWithRestore": "ルーティングサービスを停止し、すべてのアプリを直接接続に戻しました",
-    "stopWithRestoreFailed": "停止に失敗しました: {{detail}}"
+    }
   },
   "streamCheck": {
     "reachable": "{{providerName}} は接続可能 ({{responseTimeMs}}ms)",
@@ -3272,21 +3252,6 @@
       "startService": "サービスを起動",
       "backToDirect": "直接接続に戻す",
       "attachFailed": "前回の{{mode}}モードに再接続できなかったため、{{app}} は直接接続に戻りました。"
-    },
-    "toast": {
-      "enteredRoute": "{{app}} のルーティングを開始しました → {{provider}}。",
-      "enteredStack": "{{app}} を集約に切り替えました。{{app}} を再起動すると /model に集約したモデルが表示されます。",
-      "enteredStackLive": "{{app}} を集約に切り替えました。集約したモデルが /model に表示されます。",
-      "enteredStackDesktop": "{{app}} を集約に切り替えました。{{app}} を再起動すると、集約したモデルがモデル一覧に表示されます。",
-      "exited": "直接接続に戻しました：{{app}} は {{provider}} に直接接続しています。",
-      "routeRemembered": "プロバイダー {{provider}} を保存しました。クライアントがルーティングまたは集約に接続すると使用されます。",
-      "routeTargetChanged": "ルーティング先を {{provider}} に設定しました。",
-      "routeSwitched": "ルーティング先を {{provider}} に切り替えました。以降の新しいリクエストはこのプロバイダーを使用します。",
-      "stackDefaultChanged": "集約のデフォルトを {{provider}} に設定しました。選択済みの集約モデルは引き続き各モデルのプロバイダーを使用します。",
-      "clientConfigChanged": "クライアント設定も更新されました。更新後の設定を読み込むには {{app}} を再起動してください。",
-      "defaultRemembered": "集約に切り替えると、{{provider}} が既定のプロバイダーになります。",
-      "restartHint": "{{app}} の再起動後に反映されます。",
-      "failed": "切り替えに失敗しました：{{detail}}"
     },
     "dialog": {
       "routeTitle": "{{app}} でルーティングを使いますか？",
