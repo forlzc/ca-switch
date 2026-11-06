@@ -4433,6 +4433,13 @@ fn wait_child_output(
 
 
 #[cfg(target_os = "windows")]
+fn apply_extra_env(cmd: &mut std::process::Command, extra_env: &[(&str, String)]) {
+    for (key, value) in extra_env {
+        cmd.env(key, value);
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn run_windows_tool_command_capture(
     tool_path: &Path,
     args: &[&str],
@@ -4892,16 +4899,10 @@ pub async fn list_tool_installations(
 
 #[cfg(target_os = "windows")]
 fn wsl_distro_for_tool(tool: &str) -> Option<String> {
+    // 通用 API 代理版只保留 Claude 的配置目录覆盖；其余工具没有 override 目录，
+    // 一律按默认安装路径探测。
     let override_dir = match tool {
         "claude" => crate::settings::get_claude_override_dir(),
-        "codex" => crate::settings::get_codex_override_dir(),
-        "gemini" => crate::settings::get_gemini_override_dir(),
-        "grok" => crate::settings::get_grok_override_dir(),
-        "opencode" => crate::settings::get_opencode_override_dir(),
-        "openclaw" => crate::settings::get_openclaw_override_dir(),
-        "hermes" => crate::settings::get_hermes_override_dir(),
-        "pi" => crate::settings::get_pi_override_dir(),
-        "omp" => crate::settings::get_omp_override_dir(),
         _ => None,
     }?;
 

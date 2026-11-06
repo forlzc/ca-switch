@@ -32,9 +32,9 @@ pub fn get_home_dir() -> PathBuf {
 
 /// 检测路径是否为 WSL 网络路径（如 \\wsl$\Ubuntu\... 或 \\wsl.localhost\Ubuntu\...）
 /// 注意：仅检测直接 UNC 路径，映射磁盘符（如 Z: -> \\wsl$\...）无法检测
-#[cfg(all(test, windows))]
+#[cfg(windows)]
 pub(crate) fn is_wsl_path(path: &Path) -> bool {
-    use std::path::Prefix;
+    use std::path::{Component, Prefix};
     if let Some(Component::Prefix(prefix)) = path.components().next() {
         match prefix.kind() {
             Prefix::UNC(server, _) | Prefix::VerbatimUNC(server, _) => {
