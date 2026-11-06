@@ -804,8 +804,12 @@ mod tests {
             }),
             None,
         );
+        let custom_user_agent = std::env::var("E2E_UPSTREAM_USER_AGENT")
+            .ok()
+            .filter(|ua| !ua.trim().is_empty());
         provider.meta = Some(ProviderMeta {
             api_format: Some(api_format.to_string()),
+            custom_user_agent,
             ..ProviderMeta::default()
         });
         db.save_provider("claude", &provider).expect("save provider");
@@ -989,6 +993,74 @@ mod tests {
         assert!(
             text.contains("\"finish_reason\":\"tool_calls\""),
             "流式 finish_reason 不是 tool_calls: {text}"
+        );
+        assert!(text.contains("[DONE]"), "流式缺少 [DONE]: {text}");
+
+        proxy.stop().await.expect("stop proxy");
+    }
+
+    /// Chat 客户端纯文本流式（Kilo Code 这类 agent 的默认请求形态）。
+    ///
+    /// 不带 tools、带 `stream_options.include_usage`，逐块打印原始 SSE，
+    /// 用来排查「stream ended without a finish reason」这类客户端报错。
+    ///
+    /// ```bash
+    /// E2E_UPSTREAM_API_KEY=... E2E_UPSTREAM_BASE_URL=https://ps.air-outer.com/v1 \
+    /// E2E_UPSTREAM_MODEL=gpt-6-astra E2E_UPSTREAM_USER_AGENT=Kilo-Code/7.3.50 \
+    /// cargo test --lib real_upstream_chat_plain_stream -- --ignored --nocapture
+    /// ```
+    #[tokio::test]
+    #[ignore = "需要真实上游 API Key，手动运行"]
+    async fn real_upstream_chat_plain_stream() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let Ok(api_key) = std::env::var("E2E_UPSTREAM_API_KEY") else {
+            eprintln!("跳过：未设置 E2E_UPSTREAM_API_KEY");
+            return;
+        };
+        let base_url = std::env::var("E2E_UPSTREAM_BASE_URL")
+            .unwrap_or_else(|_| "https://ps.air-outer.com/v1".to_string());
+        let model =
+            std::env::var("E2E_UPSTREAM_MODEL").unwrap_or_else(|_| "gpt-6-astra".to_string());
+        if let Ok(proxy) = std::env::var("E2E_UPSTREAM_PROXY") {
+            crate::proxy::http_client::apply_proxy(Some(&proxy)).expect("apply upstream proxy");
+        }
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .unwrap();
+
+        let (proxy, proxy_url) =
+            start_real_upstream_proxy("openai_responses", &base_url, &api_key).await;
+
+        let body = json!({
+            "model": model,
+            "stream": true,
+            "stream_options": { "include_usage": true },
+            "messages": [
+                {"role": "system", "content": "你是助手，回答简洁。"},
+                {"role": "user", "content": "用三句话介绍杭州。"},
+            ],
+        });
+        let response = client
+            .post(format!("{proxy_url}/v1/chat/completions"))
+            .json(&body)
+            .send()
+            .await
+            .expect("chat stream request");
+        let status = response.status().as_u16();
+        let text = response.text().await.unwrap_or_default();
+        println!("[chat×responses 纯文本流式] -> {status}\n{text}");
+
+        assert_eq!(status, 200, "纯文本流式失败: {text}");
+        assert!(
+            text.contains("chat.completion.chunk"),
+            "流式分块不是 Chat 形状: {text}"
+        );
+        assert!(
+            text.contains("\"finish_reason\":\"stop\"")
+                || text.contains("\"finish_reason\": \"stop\""),
+            "流式缺少 finish_reason=stop: {text}"
         );
         assert!(text.contains("[DONE]"), "流式缺少 [DONE]: {text}");
 
