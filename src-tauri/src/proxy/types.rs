@@ -120,16 +120,6 @@ pub struct ProviderHealth {
     pub updated_at: String,
 }
 
-/// Live 配置备份记录
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LiveBackup {
-    /// 应用类型 (claude/codex/gemini)
-    pub app_type: String,
-    /// 原始配置 JSON
-    pub original_config: String,
-    /// 备份时间
-    pub backed_up_at: String,
-}
 
 /// 全局代理配置（统一字段，三行镜像）
 #[derive(Debug, Clone, Serialize, Deserialize)]

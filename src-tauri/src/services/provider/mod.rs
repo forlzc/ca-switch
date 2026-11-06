@@ -13,11 +13,11 @@ use serde_json::Value;
 
 use crate::app_config::AppType;
 use crate::error::AppError;
-use crate::provider::{Provider, ProviderMeta, UsageResult};
+use crate::provider::{Provider, UsageResult};
 use crate::settings::CustomEndpoint;
 use crate::store::AppState;
 
-pub use editor::{EditorSave, EditorView};
+pub use editor::EditorSave;
 use usage::validate_usage_script;
 
 /// 通用 API 代理不再拦截官方供应商：是否经本地代理访问由用户自行决定。
@@ -203,39 +203,6 @@ impl ProviderService {
                 .set_current_provider(app_type.as_str(), &provider.id)?;
         }
         Ok(true)
-    }
-
-    /// 供应商编辑器里显示的内容：这张卡自己的配置。caswitch 不再推算「切过去之后客户端
-    /// 长什么样」，预览就是保存的那份 `settings_config`。
-    pub fn editor_view(
-        state: &AppState,
-        app_type: AppType,
-        settings_config: &Value,
-        category: Option<&str>,
-    ) -> Result<EditorView, AppError> {
-        Self::editor_view_with_meta(state, app_type, settings_config, category, None, None)
-    }
-
-    /// 带草稿元数据的预览。参数保留给前端现有调用，内容与 [`Self::editor_view`] 相同。
-    pub fn editor_view_with_meta(
-        _state: &AppState,
-        _app_type: AppType,
-        settings_config: &Value,
-        _category: Option<&str>,
-        _provider_id: Option<&str>,
-        _meta: Option<&ProviderMeta>,
-    ) -> Result<EditorView, AppError> {
-        Ok(editor::view(settings_config))
-    }
-
-    /// 编辑已有供应商时的 `category`：库里那一行存的是什么就返回什么。
-    pub fn editor_category(
-        _state: &AppState,
-        _app_type: &AppType,
-        _provider_id: Option<&str>,
-        category: Option<String>,
-    ) -> Result<Option<String>, AppError> {
-        Ok(category)
     }
 
     /// 从编辑器新增供应商：和 [`Self::add`] 一样，只存行。

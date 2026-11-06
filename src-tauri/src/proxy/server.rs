@@ -454,17 +454,8 @@ impl ProxyServer {
 mod tests {
     use super::*;
     use crate::provider::{Provider, ProviderMeta};
-    use crate::AppError;
-    use axum::http::{header, HeaderMap, StatusCode};
+    use axum::http::{header, StatusCode};
     use serde_json::{json, Value};
-    use tokio::sync::Mutex;
-
-    #[derive(Debug)]
-    struct CapturedRequest {
-        path_and_query: String,
-        authorization: Option<String>,
-        body: Value,
-    }
 
     /// Windows 上监听 socket 不能被子进程继承：从 CC Switch 拉起的终端、CLI 一旦继承它，
     /// 退出后端口仍被占着，下次启动报 os error 10048（#8552）。mio 1.2.1 起才带

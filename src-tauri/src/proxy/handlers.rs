@@ -383,8 +383,7 @@ async fn handle_claude_transform(
             let status_code = status.as_u16();
             let start_time = ctx.start_time;
             let session_id = ctx.session_id.clone();
-            // 用 ctx 的 app_type：Claude Desktop 网关也走此转换路径，硬编码
-            // "claude" 会把 claude-desktop 的行错记到 claude 名下
+            // 用 ctx 的 app_type，避免把请求记账到硬编码的应用名下。
             let app_type_str = ctx.app_type_str;
 
             Some(SseUsageCollector::new(

@@ -3,8 +3,8 @@ use tauri::{Emitter, Manager, State};
 
 use crate::app_config::AppType;
 use crate::error::AppError;
-use crate::provider::{Provider, ProviderMeta};
-use crate::services::provider::{EditorSave, EditorView};
+use crate::provider::Provider;
+use crate::services::provider::EditorSave;
 use crate::services::{
     EndpointLatency, ProviderService, ProviderSortUpdate, SpeedtestService, SwitchResult,
 };
@@ -89,44 +89,6 @@ pub async fn update_provider(
     })
     .await
     .map_err(|e| format!("供应商更新任务执行失败: {e}"))?
-}
-
-/// 供应商编辑器底部 JSON 的显示内容：切到这个供应商之后配置文件会是什么样。
-/// `settingsConfig` 是供应商的行（新增时传空对象）。
-/// Codex draft metadata wins over the stored provider's metadata when supplied.
-#[tauri::command]
-pub async fn get_provider_editor_view(
-    app_handle: tauri::AppHandle,
-    app: String,
-    #[allow(non_snake_case)] settingsConfig: serde_json::Value,
-    category: Option<String>,
-    #[allow(non_snake_case)] providerId: Option<String>,
-    meta: Option<ProviderMeta>,
-) -> Result<EditorView, String> {
-    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app_handle
-            .try_state::<AppState>()
-            .ok_or_else(|| "应用状态不可用".to_string())?;
-        let category = ProviderService::editor_category(
-            state.inner(),
-            &app_type,
-            providerId.as_deref(),
-            category,
-        )
-        .map_err(|e| e.to_string())?;
-        ProviderService::editor_view_with_meta(
-            state.inner(),
-            app_type,
-            &settingsConfig,
-            category.as_deref(),
-            providerId.as_deref(),
-            meta.as_ref(),
-        )
-        .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| format!("读取编辑器内容失败: {e}"))?
 }
 
 #[tauri::command]

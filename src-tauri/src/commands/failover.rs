@@ -34,10 +34,7 @@ fn require_failover_provider(
 
 #[cfg(test)]
 mod tests {
-    use super::{require_failover_app, require_failover_provider};
-    use crate::database::Database;
-    use crate::provider::{AuthBinding, AuthBindingSource, Provider, ProviderMeta};
-    use serde_json::json;
+    use super::require_failover_app;
 
     #[test]
     fn failover_rejects_apps_without_a_proxy_data_plane() {

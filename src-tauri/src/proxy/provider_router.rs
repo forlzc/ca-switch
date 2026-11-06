@@ -287,31 +287,10 @@ impl ProviderRouter {
 mod tests {
     use super::*;
     use crate::database::Database;
-    use crate::provider::{AuthBinding, AuthBindingSource, ProviderMeta};
     use serde_json::json;
     use serial_test::serial;
     use std::env;
     use tempfile::TempDir;
-
-    fn managed_codex_official(id: &str, account_id: &str) -> Provider {
-        let mut provider = Provider::with_id(
-            id.to_string(),
-            "OpenAI Official".to_string(),
-            json!({ "auth": {}, "config": "" }),
-            None,
-        );
-        provider.category = Some("official".to_string());
-        provider.meta = Some(ProviderMeta {
-            provider_type: Some("codex_oauth".to_string()),
-            auth_binding: Some(AuthBinding {
-                source: AuthBindingSource::ManagedAccount,
-                auth_provider: Some("codex_oauth".to_string()),
-                account_id: Some(account_id.to_string()),
-            }),
-            ..Default::default()
-        });
-        provider
-    }
 
     struct TempHome {
         #[allow(dead_code)]

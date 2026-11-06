@@ -517,9 +517,7 @@ pub(crate) fn create_usage_collector(
         .outbound_model
         .clone()
         .unwrap_or_else(|| ctx.request_model.clone());
-    // 用 ctx 的 app_type 而不是 parser_config 的：Claude Desktop 流式透传复用
-    // CLAUDE_PARSER_CONFIG（app_type_str="claude"），按 parser_config 记账会把
-    // claude-desktop 的行错记到 claude 名下，导致供应商计价覆盖解析不到。
+    // 用 ctx 的 app_type 而不是 parser_config 的，避免把请求记账到解析器的默认应用名下。
     let app_type_str = ctx.app_type_str;
     let tag = ctx.tag;
     let start_time = ctx.start_time;
@@ -1365,23 +1363,6 @@ mod tests {
             Decimal::from_str(&total_cost).unwrap(),
             Decimal::from_str("4").unwrap()
         );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_claude_desktop_inherits_claude_pricing_source() -> Result<(), AppError> {
-        use crate::proxy::usage::logger::UsageLogger;
-
-        let db = Arc::new(Database::memory()?);
-
-        // proxy_config 没有 claude-desktop 行；它的计费模式必须继承 claude，
-        // 而不是静默落回工厂默认（response）
-        db.set_pricing_model_source("claude", "request").await?;
-
-        let logger = UsageLogger::new(&db);
-        let source = logger.resolve_pricing_model_source("claude-desktop").await;
-
-        assert_eq!(source, "request");
         Ok(())
     }
 

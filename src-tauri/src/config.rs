@@ -48,26 +48,6 @@ pub(crate) fn is_wsl_path(path: &Path) -> bool {
     }
 }
 
-#[cfg(all(test, not(windows)))]
-pub(crate) fn is_wsl_path(_path: &Path) -> bool {
-    false
-}
-
-/// 临时目录在 WSL 共享路径上时（WSL2 夜间测试），SQLite 拿不到文件锁，
-/// 在磁盘上建 SQLite 夹具的测试只能跳过。
-#[cfg(test)]
-pub(crate) fn sqlite_unsupported_in_temp_dir() -> bool {
-    let temp = std::env::temp_dir();
-    let unsupported = is_wsl_path(&temp);
-    if unsupported {
-        eprintln!(
-            "temp dir {} is a WSL share where SQLite cannot lock; skipping",
-            temp.display()
-        );
-    }
-    unsupported
-}
-
 /// `CC_SWITCH_TEST_HOME` 的覆盖值（测试/调试用的 home 覆盖）。
 ///
 /// 返回 `Some` 即表示显式覆盖生效——此时任何基于“库里有没有 db”的启发式回退
@@ -285,16 +265,6 @@ pub(crate) fn sorted_json_bytes<T: Serialize>(data: &T) -> Result<Vec<u8>, AppEr
 pub fn write_json_file<T: Serialize>(path: &Path, data: &T) -> Result<(), AppError> {
     write_json_file_with_contents(path, data).map(|_| ())
 }
-
-
-/// 原子写入文本文件（用于 TOML/纯文本）
-pub fn write_text_file(path: &Path, data: &str) -> Result<(), AppError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
-    }
-    atomic_write(path, data.as_bytes())
-}
-
 
 /// 原子写入：写入临时文件后 rename 替换，避免半写状态
 pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {

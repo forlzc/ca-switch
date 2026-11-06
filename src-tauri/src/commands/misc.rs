@@ -2289,7 +2289,7 @@ fn mcode_extra_search_paths(
 
 /// PATHEXT 里 `.CMD` 是否排在 `.EXE` 之前。未设置或两者都不在时按 Windows 默认
 /// （`.EXE` 在前）处理。
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 fn pathext_prefers_cmd_over_exe(pathext: Option<&str>) -> bool {
     let Some(pathext) = pathext else {
         return false;
@@ -2310,7 +2310,7 @@ fn pathext_prefers_cmd_over_exe(pathext: Option<&str>) -> bool {
 /// 同一目录里 `<tool>.cmd` 和 `<tool>.exe` 并存时，命令行敲 `<tool>` 只会按 PATHEXT
 /// 顺序命中其中一个，另一个被遮住。调用方只对已知是同一处安装多出来的入口用它
 /// （Hermes 换成 `.exe` 启动器后留下的旧 `hermes.cmd`，#8839）。
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 fn shadowed_by_pathext_sibling(path: &Path, pathext: Option<&str>) -> bool {
     let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
         return false;
@@ -5289,14 +5289,6 @@ fn shell_word(value: &str) -> String {
     } else {
         shell_single_quote(value)
     }
-}
-
-/// 交给用户 shell 执行的启动命令。有环境变量时经 `env` 设置或清除，值从启动脚本读进来的
-/// `CC_SWITCH_LAUNCH_ENV_<n>` 取，不出现在命令行里。
-#[cfg_attr(windows, allow(dead_code))]
-#[cfg(test)]
-fn unix_launch_command(launch: &ProviderLaunch) -> String {
-    unix_launch_command_in(launch, "/bin/sh")
 }
 
 /// 同上，参数按用户 shell 的规则加引号：这条命令由用户 shell 解析（见

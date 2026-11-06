@@ -87,7 +87,6 @@ const SYNC_SKIP_TABLES: &[&str] = &[
     "proxy_request_logs",
     "stream_check_logs",
     "provider_health",
-    "proxy_live_backup",
     "usage_daily_rollups",
 ];
 
@@ -96,7 +95,6 @@ const SYNC_SKIP_TABLES: &[&str] = &[
 const SYNC_PRESERVE_TABLES: &[&str] = &[
     "proxy_request_logs",
     "stream_check_logs",
-    "proxy_live_backup",
     "usage_daily_rollups",
 ];
 
@@ -674,15 +672,7 @@ impl Database {
     /// from being completed by `create_tables_on_conn`, while allowing a valid
     /// backup whose user-owned configuration tables happen to contain no rows.
     fn validate_imported_schema(conn: &Connection) -> Result<(), AppError> {
-        const REQUIRED_TABLES: &[&str] = &[
-            "providers",
-            "provider_endpoints",
-            "mcp_servers",
-            "prompts",
-            "skills",
-            "skill_repos",
-            "settings",
-        ];
+        const REQUIRED_TABLES: &[&str] = &["providers", "provider_endpoints", "settings"];
 
         let mut missing = Vec::new();
         for table in REQUIRED_TABLES {
@@ -1382,19 +1372,14 @@ mod tests {
 
     #[test]
     #[serial]
-    fn import_accepts_genuine_export_without_provider_or_mcp_rows() -> Result<(), AppError> {
+    fn import_accepts_genuine_export_without_provider_rows() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let source = Database::memory()?;
         {
             let conn = crate::database::lock_conn!(source.conn);
-            let counts: (i64, i64) = conn.query_row(
-                "SELECT
-                    (SELECT COUNT(*) FROM providers),
-                    (SELECT COUNT(*) FROM mcp_servers)",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )?;
-            assert_eq!(counts, (0, 0));
+            let count: i64 =
+                conn.query_row("SELECT COUNT(*) FROM providers", [], |row| row.get(0))?;
+            assert_eq!(count, 0);
             conn.execute(
                 "INSERT INTO settings (key, value) VALUES ('empty-export-marker', 'kept')",
                 [],
@@ -1414,14 +1399,8 @@ mod tests {
         target.import_sql_string(&sql)?;
 
         let conn = crate::database::lock_conn!(target.conn);
-        let counts: (i64, i64) = conn.query_row(
-            "SELECT
-                (SELECT COUNT(*) FROM providers),
-                (SELECT COUNT(*) FROM mcp_servers)",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        assert_eq!(counts, (0, 0));
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM providers", [], |row| row.get(0))?;
+        assert_eq!(count, 0);
         let marker: String = conn.query_row(
             "SELECT value FROM settings WHERE key = 'empty-export-marker'",
             [],

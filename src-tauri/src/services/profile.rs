@@ -1,15 +1,11 @@
 //! 项目 Profile 编排服务
 //!
 //! Profile 是**全应用共享的项目实体**（用户拥有的项目就那几个），payload
-//! 按 app 分槽存配置快照（供应商 / MCP / Skills / Prompt）。快照与应用
-//! 均**按分组（scope）操作**：Claude Code 与 Codex 的工作目录往往不同
-//! （各在各的项目里），因此各组独立指向自己的当前项目、只拍/只应用组内
-//! 槽位，互不牵连；重命名/删除作用于共享实体本身。
+//! 按 app 分槽存供应商配置快照。快照与应用均**按分组（scope）操作**：
+//! 各分组独立指向自己的当前项目、只拍/只应用组内槽位，互不牵连；
+//! 重命名/删除作用于共享实体本身。
 //! 应用（apply）时复用现有切换原语批量落地：
 //! - 供应商：`ProviderService::switch`（内建代理接管热切换与接管下禁切官方）
-//! - MCP：`McpService::toggle_app`（改标志 + 单 server 物化）
-//! - Skills：`SkillService::toggle_app`（改标志 + 单 skill 物化）
-//! - Prompt：`PromptService::enable_prompt`（互斥激活 + 原子写 live）
 //!
 //! apply 为 best-effort：单项失败收集为 warning 继续，不整体回滚。
 
@@ -18,8 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::app_config::AppType;
 use crate::database::Profile;
 use crate::error::AppError;
-use crate::prompt::Prompt;
-use crate::services::{PromptService, ProviderService};
+use crate::services::ProviderService;
 use crate::store::AppState;
 
 /// Profile 操作的应用分组：当前只有 Claude 一个分组。
@@ -63,12 +58,6 @@ impl ProfileScope {
     }
 }
 
-/// 提示词槽位的「拍到时没有启用中的提示词」标记（应用时停用当前启用项）。
-///
-/// 不能用 None 表示：None 已约定为「该侧从未拍过、不动」。提示词 id 不会是空串；
-/// 旧版读到它会当作已删除的提示词跳过并给提示，不会误改配置。
-pub const NO_ACTIVE_PROMPT: &str = "";
-
 /// 按 app 分槽的载荷容器；字段名与 AppType 的 serde 形式一致
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -100,8 +89,6 @@ impl<T> PerApp<T> {
 pub struct ProfilePayload {
     /// 每 app 的当前供应商 id
     pub providers: PerApp<Option<String>>,
-    /// 每 app 激活的 prompt id；Some([`NO_ACTIVE_PROMPT`]) = 拍到时没有启用项
-    pub prompts: PerApp<Option<String>>,
 }
 
 impl ProfilePayload {
@@ -114,18 +101,15 @@ impl ProfilePayload {
             {
                 *dst = src.clone();
             }
-            if let (Some(dst), Some(src)) = (self.prompts.get_mut(app), other.prompts.get(app)) {
-                *dst = src.clone();
-            }
         }
     }
 
     /// 某分组是否拍过快照（任一槽位非 None 即视为拍过）
     pub fn scope_captured(&self, scope: ProfileScope) -> bool {
-        scope.apps().iter().any(|app| {
-            self.providers.get(app).is_some_and(|s| s.is_some())
-                || self.prompts.get(app).is_some_and(|s| s.is_some())
-        })
+        scope
+            .apps()
+            .iter()
+            .any(|app| self.providers.get(app).is_some_and(|s| s.is_some()))
     }
 }
 pub struct ProfileService;
@@ -142,16 +126,6 @@ impl ProfileService {
             if let Some(slot) = payload.providers.get_mut(app) {
                 *slot = ProviderService::active_provider(&state.db, app)?
                     .map(|provider| provider.id);
-            }
-            if let Some(slot) = payload.prompts.get_mut(app) {
-                *slot = Some(
-                    state
-                        .db
-                        .get_prompts(app.as_str())?
-                        .values()
-                        .find(|p| p.enabled)
-                        .map_or_else(|| NO_ACTIVE_PROMPT.to_string(), |p| p.id.clone()),
-                );
             }
         }
         Ok(payload)
@@ -303,31 +277,6 @@ impl ProfileService {
                 }
             }
 
-            // 4. Prompt（None = 不动；NO_ACTIVE_PROMPT = 停用当前启用项；
-            //    已激活则幂等跳过，避免无谓的文件写与备份）
-            if let Some(Some(target_prompt)) = payload.prompts.get(app) {
-                let prompts = state.db.get_prompts(app_str)?;
-                match prompts.get(target_prompt) {
-                    None if target_prompt == NO_ACTIVE_PROMPT => {
-                        if prompts.values().any(|p| p.enabled) {
-                            Self::disable_active_prompts(state, app, &mut warnings);
-                        }
-                    }
-                    None => warnings.push(format!(
-                        "[{app_str}] prompt '{target_prompt}' no longer exists, skipped"
-                    )),
-                    Some(p) if p.enabled => {}
-                    Some(_) => {
-                        if let Err(e) =
-                            PromptService::enable_prompt(state, app.clone(), target_prompt)
-                        {
-                            warnings.push(format!(
-                                "[{app_str}] enable prompt '{target_prompt}' failed: {e}"
-                            ));
-                        }
-                    }
-                }
-            }
         }
 
         state
@@ -335,29 +284,5 @@ impl ProfileService {
             .set_current_profile_id(scope.as_str(), Some(profile_id))?;
 
         Ok(warnings)
-    }
-
-    /// 停用应用当前启用的提示词（项目快照里该应用没有启用项时）。
-    ///
-    /// 先经 `PromptService::get_prompts` 把 live 文件里的外部编辑回填进启用项，
-    /// 再走与界面「停用」相同的 `upsert_prompt(enabled=false)`：停掉最后一条启用项时清空文件。
-    fn disable_active_prompts(state: &AppState, app: &AppType, warnings: &mut Vec<String>) {
-        let app_str = app.as_str();
-        let prompts = match PromptService::get_prompts(state, app.clone()) {
-            Ok(prompts) => prompts,
-            Err(e) => {
-                warnings.push(format!("[{app_str}] read prompts failed: {e}"));
-                return;
-            }
-        };
-        for (id, prompt) in prompts.into_iter().filter(|(_, p)| p.enabled) {
-            let disabled = Prompt {
-                enabled: false,
-                ..prompt
-            };
-            if let Err(e) = PromptService::upsert_prompt(state, app.clone(), &id, disabled) {
-                warnings.push(format!("[{app_str}] disable prompt '{id}' failed: {e}"));
-            }
-        }
     }
 }

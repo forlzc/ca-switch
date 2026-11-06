@@ -3221,15 +3221,6 @@ fn is_streaming_request(endpoint: &str, body: &Value, headers: &axum::http::Head
         .unwrap_or(false)
 }
 
-#[cfg(test)]
-fn should_force_identity_encoding(
-    endpoint: &str,
-    body: &Value,
-    headers: &axum::http::HeaderMap,
-) -> bool {
-    is_streaming_request(endpoint, body, headers)
-}
-
 fn map_reqwest_send_error(error: reqwest::Error) -> ProxyError {
     let is_timeout = error.is_timeout();
     let is_connect = error.is_connect();

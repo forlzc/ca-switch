@@ -13,8 +13,6 @@ mod lightweight;
 mod linux_fix;
 mod model_capabilities;
 mod panic_hook;
-mod prompt;
-mod prompt_files;
 pub mod floor;
 pub mod model_label;
 pub mod protocol;
@@ -38,13 +36,12 @@ pub use config::{get_claude_settings_path, read_json_file};
 pub use database::{Database, Profile};
 pub use deeplink::{import_provider_from_deeplink, parse_deeplink_url, DeepLinkImportRequest};
 pub use error::AppError;
-pub use prompt::Prompt;
 pub use protocol::{AuthStyle, Conversion, Matrix, Protocol, ProtocolSource, Transform};
 pub use provider::{Provider, ProviderMeta};
 pub use services::{
-    profile::{ProfilePayload, ProfileScope, ProfileService, NO_ACTIVE_PROMPT},
-    provider::{EditorSave, EditorView},
-    ConfigService, EndpointLatency, PromptService, ProviderService, ProxyService, SpeedtestService,
+    profile::{ProfilePayload, ProfileScope, ProfileService},
+    provider::EditorSave,
+    ConfigService, EndpointLatency, ProviderService, ProxyService, SpeedtestService,
 };
 pub use settings::{update_settings, AppSettings};
 pub use store::AppState;
@@ -1072,7 +1069,6 @@ pub fn run() {
             commands::get_current_provider,
             commands::add_provider,
             commands::update_provider,
-            commands::get_provider_editor_view,
             commands::delete_provider,
             commands::switch_provider,
             commands::get_claude_config_status,

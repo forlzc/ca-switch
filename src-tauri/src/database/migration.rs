@@ -49,10 +49,7 @@ impl Database {
         // 1. 迁移 Providers
         Self::migrate_providers(tx, config)?;
 
-        // 3. 迁移 Prompts
-        Self::migrate_prompts(tx, config)?;
-
-        // 5. 迁移 Common Config
+        // 2. 迁移 Common Config
         Self::migrate_common_config(tx, config)?;
 
         Ok(())
@@ -108,43 +105,6 @@ impl Database {
                 }
             }
         }
-        Ok(())
-    }
-
-    /// 迁移提示词数据
-    fn migrate_prompts(
-        tx: &rusqlite::Transaction<'_>,
-        config: &MultiAppConfig,
-    ) -> Result<(), AppError> {
-        let migrate_app_prompts = |prompts_map: &std::collections::HashMap<
-            String,
-            crate::prompt::Prompt,
-        >,
-                                   app_type: &str|
-         -> Result<(), AppError> {
-            for (id, prompt) in prompts_map {
-                tx.execute(
-                        "INSERT OR REPLACE INTO prompts (
-                            id, app_type, name, content, description, enabled, created_at, updated_at
-                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                        params![
-                            id,
-                            app_type,
-                            prompt.name,
-                            prompt.content,
-                            prompt.description,
-                            prompt.enabled,
-                            prompt.created_at,
-                            prompt.updated_at,
-                        ],
-                    )
-                    .map_err(|e| AppError::Database(format!("Migrate prompt failed: {e}")))?;
-            }
-            Ok(())
-        };
-
-        migrate_app_prompts(&config.prompts.claude.prompts, "claude")?;
-
         Ok(())
     }
 

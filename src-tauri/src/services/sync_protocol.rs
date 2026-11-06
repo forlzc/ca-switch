@@ -78,10 +78,6 @@ pub(crate) fn should_trigger_auto_sync_for_table(table: &str) -> bool {
         normalized.as_str(),
         "providers"
             | "provider_endpoints"
-            | "mcp_servers"
-            | "prompts"
-            | "skills"
-            | "skill_repos"
             | "profiles"
             | "settings"
             | "proxy_config"

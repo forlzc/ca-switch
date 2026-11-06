@@ -75,7 +75,7 @@ pub fn extract_session_id(
     body: &serde_json::Value,
     client_format: &str,
 ) -> SessionIdResult {
-    if matches!(client_format, "claude" | "claude-desktop") {
+    if client_format == "claude" {
         if let Some(result) = extract_claude_session(headers, body) {
             return result;
         }
@@ -253,7 +253,7 @@ mod tests {
     #[test]
     fn test_claude_json_user_id_keeps_session_across_requests() {
         let headers = HeaderMap::new();
-        for client_format in ["claude", "claude-desktop"] {
+        for client_format in ["claude"] {
             for turn in 0..3 {
                 let body = json!({
                     "metadata": { "user_id": json!({
@@ -287,7 +287,7 @@ mod tests {
                 "user_id": user_id,
                 "session_id": "fallback-session"
             }});
-            let result = extract_session_id(&HeaderMap::new(), &body, "claude-desktop");
+            let result = extract_session_id(&HeaderMap::new(), &body, "claude");
             assert_eq!(result.session_id, "fallback-session", "{user_id}");
             assert_eq!(result.source, SessionIdSource::MetadataSessionId);
             assert!(result.client_provided);
@@ -300,14 +300,14 @@ mod tests {
     }
 
     #[test]
-    fn test_claude_desktop_headers_precede_json_metadata() {
+    fn test_claude_headers_precede_json_metadata() {
         for header_name in ["x-claude-code-session-id", "claude-code-session-id"] {
             let mut headers = HeaderMap::new();
             headers.insert(header_name, "header-session".parse().unwrap());
             let body = json!({"metadata": {"user_id":
                 r#"{"session_id":"metadata-session"}"#
             }});
-            let result = extract_session_id(&headers, &body, "claude-desktop");
+            let result = extract_session_id(&headers, &body, "claude");
             assert_eq!(result.session_id, "header-session");
             assert_eq!(result.source, SessionIdSource::Header);
             assert!(result.client_provided);

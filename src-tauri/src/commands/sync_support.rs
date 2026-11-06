@@ -1,16 +1,13 @@
 use serde_json::{json, Value};
 
 use crate::error::AppError;
-use crate::services::{model_pricing, PromptService};
+use crate::services::model_pricing;
 use crate::settings;
 use crate::store::AppState;
 
 pub(crate) fn run_post_import_sync(app_state: &AppState) -> Result<(), AppError> {
     let mut failures = Vec::new();
 
-    if let Err(error) = PromptService::sync_all_to_live(app_state) {
-        failures.push(format!("prompts: {error}"));
-    }
     if let Err(error) = model_pricing::sync_local_model_pricing(&app_state.db) {
         failures.push(format!("model pricing: {error}"));
     }

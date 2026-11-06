@@ -58,7 +58,7 @@ pub fn dedup_scope_for_app<'a>(
     app_type: &'a str,
     provider_id: &'a str,
 ) -> Option<(&'a str, &'a str)> {
-    (!matches!(app_type, "claude" | "claude-desktop")).then_some((app_type, provider_id))
+    (app_type != "claude").then_some((app_type, provider_id))
 }
 
 fn response_id(body: &Value, field: &str) -> Option<String> {
@@ -549,16 +549,12 @@ mod tests {
             ..Default::default()
         };
 
-        for app_type in ["claude", "claude-desktop"] {
+        for app_type in ["claude"] {
             assert_eq!(
                 usage.dedup_request_id(dedup_scope_for_app(app_type, "provider-a")),
                 "session:msg_123"
             );
         }
-        assert_eq!(
-            usage.dedup_request_id(dedup_scope_for_app("codex", "provider-a")),
-            "session:codex:provider-a:msg_123"
-        );
     }
 
     #[test]

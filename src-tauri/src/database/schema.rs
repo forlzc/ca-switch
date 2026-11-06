@@ -87,72 +87,6 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        // 3. MCP Servers 表
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS mcp_servers (
-            id TEXT PRIMARY KEY, name TEXT NOT NULL, server_config TEXT NOT NULL,
-            description TEXT, homepage TEXT, docs TEXT, tags TEXT NOT NULL DEFAULT '[]',
-            enabled_claude BOOLEAN NOT NULL DEFAULT 0, enabled_codex BOOLEAN NOT NULL DEFAULT 0,
-            enabled_gemini BOOLEAN NOT NULL DEFAULT 0, enabled_grokbuild BOOLEAN NOT NULL DEFAULT 0,
-            enabled_opencode BOOLEAN NOT NULL DEFAULT 0,
-            enabled_mcode BOOLEAN NOT NULL DEFAULT 0,
-            enabled_agy BOOLEAN NOT NULL DEFAULT 0,
-            enabled_kimi BOOLEAN NOT NULL DEFAULT 0,
-            enabled_dsh BOOLEAN NOT NULL DEFAULT 0,
-            enabled_hermes BOOLEAN NOT NULL DEFAULT 0,
-            enabled_pi BOOLEAN NOT NULL DEFAULT 0,
-            enabled_omp BOOLEAN NOT NULL DEFAULT 0
-        )",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
-        // 4. Prompts 表
-        conn.execute("CREATE TABLE IF NOT EXISTS prompts (
-            id TEXT NOT NULL, app_type TEXT NOT NULL, name TEXT NOT NULL, content TEXT NOT NULL,
-            description TEXT, enabled BOOLEAN NOT NULL DEFAULT 1, created_at INTEGER, updated_at INTEGER,
-            PRIMARY KEY (id, app_type)
-        )", []).map_err(|e| AppError::Database(e.to_string()))?;
-
-        // 5. Skills 表（v3.10.0+ 统一结构）
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS skills (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            description TEXT,
-            directory TEXT NOT NULL,
-            repo_owner TEXT,
-            repo_name TEXT,
-            repo_branch TEXT DEFAULT 'main',
-            readme_url TEXT,
-            enabled_claude BOOLEAN NOT NULL DEFAULT 0,
-            enabled_codex BOOLEAN NOT NULL DEFAULT 0,
-            enabled_gemini BOOLEAN NOT NULL DEFAULT 0,
-            enabled_grokbuild BOOLEAN NOT NULL DEFAULT 0,
-            enabled_opencode BOOLEAN NOT NULL DEFAULT 0,
-            enabled_mcode BOOLEAN NOT NULL DEFAULT 0,
-            enabled_agy BOOLEAN NOT NULL DEFAULT 0,
-            enabled_kimi BOOLEAN NOT NULL DEFAULT 0,
-            enabled_dsh BOOLEAN NOT NULL DEFAULT 0,
-            enabled_hermes BOOLEAN NOT NULL DEFAULT 0,
-            installed_at INTEGER NOT NULL DEFAULT 0,
-            content_hash TEXT,
-            updated_at INTEGER NOT NULL DEFAULT 0
-        )",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
-        // 6. Skill Repos 表
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS skill_repos (
-            owner TEXT NOT NULL, name TEXT NOT NULL, branch TEXT NOT NULL DEFAULT 'main',
-            enabled BOOLEAN NOT NULL DEFAULT 1, PRIMARY KEY (owner, name)
-        )",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
         // 7. Settings 表
         conn.execute(
             "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)",
@@ -299,15 +233,6 @@ impl Database {
         .map_err(|e| AppError::Database(e.to_string()))?;
 
         // 注意：circuit_breaker_config 已合并到 proxy_config 表中
-
-        // 16. Proxy Live Backup 表 (Live 配置备份)
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS proxy_live_backup (
-            app_type TEXT PRIMARY KEY, original_config TEXT NOT NULL, backed_up_at TEXT NOT NULL
-        )",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
 
         // 17. Usage Daily Rollups 表 (日聚合统计)
         // request_model 保留路由接管的「客户端别名 → 真实模型」映射维度，
@@ -654,6 +579,11 @@ impl Database {
                         Self::migrate_v26_to_v27(conn)?;
                         Self::set_user_version(conn, 27)?;
                     }
+                    27 => {
+                        log::info!("迁移数据库从 v27 到 v28（下线 MCP/Skills/Prompts/代理实时备份表）");
+                        Self::migrate_v27_to_v28(conn)?;
+                        Self::set_user_version(conn, 28)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -686,6 +616,21 @@ impl Database {
     /// 每一条历史迁移测试里跑，放在这里会把刚恢复的供应商整表删掉（v3.8 备份
     /// 回归测试即因此红掉）。schema 层只保留版本推进。
     fn migrate_v25_to_v26(_conn: &Connection) -> Result<(), AppError> {
+        Ok(())
+    }
+
+    /// v27 → v28：下线 MCP / Skills / Prompts / 代理实时备份五张表。
+    fn migrate_v27_to_v28(conn: &Connection) -> Result<(), AppError> {
+        for table in [
+            "mcp_servers",
+            "skills",
+            "skill_repos",
+            "prompts",
+            "proxy_live_backup",
+        ] {
+            conn.execute(&format!("DROP TABLE IF EXISTS {table}"), [])
+                .map_err(|e| AppError::Database(format!("删除表 {table} 失败: {e}")))?;
+        }
         Ok(())
     }
 
@@ -1141,41 +1086,56 @@ impl Database {
         // provider_endpoints 表
         Self::add_column_if_missing(conn, "provider_endpoints", "added_at", "INTEGER")?;
 
-        // mcp_servers 表
-        Self::add_column_if_missing(conn, "mcp_servers", "description", "TEXT")?;
-        Self::add_column_if_missing(conn, "mcp_servers", "homepage", "TEXT")?;
-        Self::add_column_if_missing(conn, "mcp_servers", "docs", "TEXT")?;
-        Self::add_column_if_missing(conn, "mcp_servers", "tags", "TEXT NOT NULL DEFAULT '[]'")?;
-        Self::add_column_if_missing(
-            conn,
-            "mcp_servers",
-            "enabled_codex",
-            "BOOLEAN NOT NULL DEFAULT 0",
-        )?;
-        Self::add_column_if_missing(
-            conn,
-            "mcp_servers",
-            "enabled_gemini",
-            "BOOLEAN NOT NULL DEFAULT 0",
-        )?;
+        // 以下表已下线，仅补齐旧库中仍存在的表结构
+        if Self::table_exists(conn, "mcp_servers")? {
+            Self::add_column_if_missing(conn, "mcp_servers", "description", "TEXT")?;
+            Self::add_column_if_missing(conn, "mcp_servers", "homepage", "TEXT")?;
+            Self::add_column_if_missing(conn, "mcp_servers", "docs", "TEXT")?;
+            Self::add_column_if_missing(conn, "mcp_servers", "tags", "TEXT NOT NULL DEFAULT '[]'")?;
+            Self::add_column_if_missing(
+                conn,
+                "mcp_servers",
+                "enabled_codex",
+                "BOOLEAN NOT NULL DEFAULT 0",
+            )?;
+            Self::add_column_if_missing(
+                conn,
+                "mcp_servers",
+                "enabled_gemini",
+                "BOOLEAN NOT NULL DEFAULT 0",
+            )?;
+        }
 
-        // prompts 表
-        Self::add_column_if_missing(conn, "prompts", "description", "TEXT")?;
-        Self::add_column_if_missing(conn, "prompts", "enabled", "BOOLEAN NOT NULL DEFAULT 1")?;
-        Self::add_column_if_missing(conn, "prompts", "created_at", "INTEGER")?;
-        Self::add_column_if_missing(conn, "prompts", "updated_at", "INTEGER")?;
+        if Self::table_exists(conn, "prompts")? {
+            Self::add_column_if_missing(conn, "prompts", "description", "TEXT")?;
+            Self::add_column_if_missing(conn, "prompts", "enabled", "BOOLEAN NOT NULL DEFAULT 1")?;
+            Self::add_column_if_missing(conn, "prompts", "created_at", "INTEGER")?;
+            Self::add_column_if_missing(conn, "prompts", "updated_at", "INTEGER")?;
+        }
 
-        // skills 表
-        Self::add_column_if_missing(conn, "skills", "installed_at", "INTEGER NOT NULL DEFAULT 0")?;
+        if Self::table_exists(conn, "skills")? {
+            Self::add_column_if_missing(
+                conn,
+                "skills",
+                "installed_at",
+                "INTEGER NOT NULL DEFAULT 0",
+            )?;
+        }
 
-        // skill_repos 表
-        Self::add_column_if_missing(
-            conn,
-            "skill_repos",
-            "branch",
-            "TEXT NOT NULL DEFAULT 'main'",
-        )?;
-        Self::add_column_if_missing(conn, "skill_repos", "enabled", "BOOLEAN NOT NULL DEFAULT 1")?;
+        if Self::table_exists(conn, "skill_repos")? {
+            Self::add_column_if_missing(
+                conn,
+                "skill_repos",
+                "branch",
+                "TEXT NOT NULL DEFAULT 'main'",
+            )?;
+            Self::add_column_if_missing(
+                conn,
+                "skill_repos",
+                "enabled",
+                "BOOLEAN NOT NULL DEFAULT 1",
+            )?;
+        }
         // 注意: skills_path 字段已被移除，因为现在支持全仓库递归扫描
 
         Ok(())
@@ -1472,6 +1432,9 @@ impl Database {
 
     /// 迁移 skills 表：从单 key 主键改为 (directory, app_type) 复合主键
     fn migrate_skills_table(conn: &Connection) -> Result<(), AppError> {
+        if !Self::table_exists(conn, "skills")? {
+            return Ok(());
+        }
         // v3 结构（统一管理架构）已经是更高版本的 skills 表：
         // - 主键为 id
         // - 包含 enabled_claude / enabled_codex / enabled_gemini 等列
@@ -1563,6 +1526,9 @@ impl Database {
     /// 1. 旧数据库只存储安装记录，真正的 skill 文件在文件系统
     /// 2. 直接重建新表结构，后续由 SkillService 在首次启动时扫描文件系统重建数据
     fn migrate_v2_to_v3(conn: &Connection) -> Result<(), AppError> {
+        if !Self::table_exists(conn, "skills")? {
+            return Ok(());
+        }
         // 检查是否已经是新结构（通过检查是否有 enabled_claude 列）
         if Self::has_column(conn, "skills", "enabled_claude")? {
             log::info!("skills 表已经是 v3 结构，跳过迁移");
@@ -1644,21 +1610,24 @@ impl Database {
     ///
     /// 为 mcp_servers 和 skills 表添加 enabled_opencode 列。
     fn migrate_v3_to_v4(conn: &Connection) -> Result<(), AppError> {
-        // 为 mcp_servers 表添加 enabled_opencode 列
-        Self::add_column_if_missing(
-            conn,
-            "mcp_servers",
-            "enabled_opencode",
-            "BOOLEAN NOT NULL DEFAULT 0",
-        )?;
+        // 已下线的表仅在旧库中存在时才补列
+        if Self::table_exists(conn, "mcp_servers")? {
+            Self::add_column_if_missing(
+                conn,
+                "mcp_servers",
+                "enabled_opencode",
+                "BOOLEAN NOT NULL DEFAULT 0",
+            )?;
+        }
 
-        // 为 skills 表添加 enabled_opencode 列
-        Self::add_column_if_missing(
-            conn,
-            "skills",
-            "enabled_opencode",
-            "BOOLEAN NOT NULL DEFAULT 0",
-        )?;
+        if Self::table_exists(conn, "skills")? {
+            Self::add_column_if_missing(
+                conn,
+                "skills",
+                "enabled_opencode",
+                "BOOLEAN NOT NULL DEFAULT 0",
+            )?;
+        }
 
         log::info!("v3 -> v4 迁移完成：已添加 OpenCode 支持");
         Ok(())
@@ -1859,12 +1828,14 @@ impl Database {
 
     /// v9 -> v10 迁移：添加 Hermes Agent 支持
     fn migrate_v9_to_v10(conn: &Connection) -> Result<(), AppError> {
-        Self::add_column_if_missing(
-            conn,
-            "mcp_servers",
-            "enabled_hermes",
-            "BOOLEAN NOT NULL DEFAULT 0",
-        )?;
+        if Self::table_exists(conn, "mcp_servers")? {
+            Self::add_column_if_missing(
+                conn,
+                "mcp_servers",
+                "enabled_hermes",
+                "BOOLEAN NOT NULL DEFAULT 0",
+            )?;
+        }
 
         // skills table may not exist in databases migrated from very old versions
         if Self::table_exists(conn, "skills")? {

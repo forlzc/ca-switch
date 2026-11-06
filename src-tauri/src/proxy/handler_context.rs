@@ -95,32 +95,6 @@ impl RequestContext {
         Self::build(state, body, headers, app_type, tag, app_type_str, None).await
     }
 
-    /// 测试专用：直接指定供应商，跳过 ProviderRouter。
-    ///
-    /// 原先是借 `StackTarget` 注入的；Stack 移除后单开一个入口，免得测试为了"用哪家"
-    /// 去改数据库状态。
-    #[cfg(test)]
-    pub async fn with_provider(
-        state: &ProxyState,
-        body: &serde_json::Value,
-        headers: &HeaderMap,
-        app_type: AppType,
-        tag: &'static str,
-        app_type_str: &'static str,
-        provider: crate::provider::Provider,
-    ) -> Result<Self, ProxyError> {
-        Self::build(
-            state,
-            body,
-            headers,
-            app_type,
-            tag,
-            app_type_str,
-            Some(provider),
-        )
-        .await
-    }
-
     async fn build(
         state: &ProxyState,
         body: &serde_json::Value,

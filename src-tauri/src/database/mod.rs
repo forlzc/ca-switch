@@ -17,10 +17,9 @@
 //! ├── migration.rs  - JSON → SQLite 数据迁移
 //! └── dao/          - 数据访问对象
 //!     ├── providers.rs
-//!     ├── mcp.rs
-//!     ├── prompts.rs
-//!     ├── skills.rs
-//!     └── settings.rs
+//!     ├── profiles.rs
+//!     ├── settings.rs
+//!     └── ...
 //! ```
 
 pub(crate) mod backup;
@@ -48,7 +47,7 @@ use std::sync::Mutex;
 
 /// 当前 Schema 版本号
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 27;
+pub(crate) const SCHEMA_VERSION: i32 = 28;
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
@@ -299,21 +298,4 @@ impl Database {
         Ok(rebuilt)
     }
 
-    /// 检查 MCP 服务器表是否为空
-    pub fn is_mcp_table_empty(&self) -> Result<bool, AppError> {
-        let conn = lock_conn!(self.conn);
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM mcp_servers", [], |row| row.get(0))
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        Ok(count == 0)
-    }
-
-    /// 检查提示词表是否为空
-    pub fn is_prompts_table_empty(&self) -> Result<bool, AppError> {
-        let conn = lock_conn!(self.conn);
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM prompts", [], |row| row.get(0))
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        Ok(count == 0)
-    }
 }

@@ -22,10 +22,6 @@ use axum::{
 use serde_json::json;
 use std::net::IpAddr;
 
-/// Claude Desktop's namespace already requires its gateway token, which a page
-/// cannot know, so the desktop app is not held to the header rules.
-const TOKEN_PROTECTED_PREFIX: &str = "/claude-desktop/";
-
 pub(super) async fn reject_browser_requests(
     State(state): State<ProxyState>,
     request: Request,
@@ -61,12 +57,12 @@ pub(super) async fn reject_browser_requests(
 }
 
 fn check_request(
-    path: &str,
+    _path: &str,
     headers: &HeaderMap,
     listen_address: &str,
     client_host: Option<&str>,
 ) -> Result<(), &'static str> {
-    if !path.starts_with(TOKEN_PROTECTED_PREFIX) && headers.contains_key(header::ORIGIN) {
+    if headers.contains_key(header::ORIGIN) {
         return Err("requests from web pages are not accepted");
     }
     if is_loopback_listener(listen_address) {
@@ -145,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn any_origin_is_rejected_outside_claude_desktop() {
+    fn any_origin_is_rejected() {
         for origin in ["https://evil.example", "null", "tauri://localhost"] {
             let h = headers(&[("host", "127.0.0.1:15721"), ("origin", origin)]);
             for path in ["/v1/messages", "/v1/responses", "/v1beta/models", "/status"] {
@@ -154,18 +150,6 @@ mod tests {
             // LAN listeners are covered too: the Origin rule does not depend on Host.
             assert!(check_request("/v1/messages", &h, "0.0.0.0", None).is_err());
         }
-    }
-
-    #[test]
-    fn claude_desktop_keeps_its_token_check_only() {
-        let h = headers(&[("host", "127.0.0.1:15721"), ("origin", "app://claude")]);
-        assert_eq!(
-            check_request("/claude-desktop/v1/messages", &h, "127.0.0.1", None),
-            Ok(())
-        );
-        // Rebinding still applies there: the Host rule is not exempted.
-        let h = headers(&[("host", "rebind.evil.example:15721")]);
-        assert!(check_request("/claude-desktop/v1/models", &h, "127.0.0.1", None).is_err());
     }
 
     #[test]

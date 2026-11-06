@@ -2567,9 +2567,6 @@ fn model_pricing_candidates(model_id: &str) -> Vec<String> {
         if let Some(stripped) = strip_known_model_namespace(&candidate) {
             queue.push(stripped);
         }
-        if let Some(stripped) = strip_claude_desktop_non_anthropic_prefix(&candidate) {
-            queue.push(stripped);
-        }
         if let Some(stripped) = strip_bedrock_model_version_suffix(&candidate) {
             queue.push(stripped);
         }
@@ -2633,52 +2630,6 @@ fn strip_known_model_namespace(model_id: &str) -> Option<String> {
     None
 }
 
-fn strip_claude_desktop_non_anthropic_prefix(model_id: &str) -> Option<String> {
-    const NON_ANTHROPIC_MARKERS: &[&str] = &[
-        "abab",
-        "ark-code",
-        "arctic",
-        "astron",
-        "codex",
-        "command-r",
-        "deepseek",
-        "doubao",
-        "ernie",
-        "gemini",
-        "gemma",
-        "glm",
-        "gpt",
-        "grok",
-        "hermes",
-        "hy3",
-        "hunyuan",
-        "jamba",
-        "kimi",
-        "lfm",
-        "llama",
-        "longcat",
-        "mercury",
-        "mimo",
-        "minimax",
-        "mistral",
-        "mixtral",
-        "moonshot",
-        "nemotron",
-        "nova-",
-        "openai",
-        "qianfan",
-        "qwen",
-        "seed-",
-        "solar",
-        "stepfun",
-    ];
-
-    let rest = model_id.strip_prefix("claude-")?;
-    NON_ANTHROPIC_MARKERS
-        .iter()
-        .any(|marker| rest.starts_with(marker))
-        .then(|| rest.to_string())
-}
 
 fn strip_bedrock_model_version_suffix(model_id: &str) -> Option<String> {
     let (base, suffix) = model_id.rsplit_once("-v")?;
@@ -3134,82 +3085,6 @@ mod tests {
         Ok(())
     }
 
-
-    #[test]
-    fn test_claude_desktop_folds_into_claude_for_display() -> Result<(), AppError> {
-        let db = Database::memory()?;
-        let ts = local_ts(2026, 6, 10, 12, 0, 0);
-
-        {
-            let conn = lock_conn!(db.conn);
-            // 一条 Claude Code 行 + 一条 Claude Desktop 网关行，同一时间窗。
-            insert_usage_log(
-                &conn,
-                "cc-1",
-                "claude",
-                "p-claude",
-                "claude-sonnet-4-5",
-                "proxy",
-                ts,
-                100,
-                10,
-                0,
-                0,
-                200,
-                "0.5",
-            )?;
-            insert_usage_log(
-                &conn,
-                "cd-1",
-                "claude-desktop",
-                "p-desktop",
-                "claude-opus-4-8",
-                "proxy",
-                ts,
-                200,
-                20,
-                0,
-                0,
-                200,
-                "1.5",
-            )?;
-        }
-
-        // ① 分应用汇总：desktop 折叠进 claude，不再单列 claude-desktop 桶。
-        let by_app = db.get_usage_summary_by_app(None, None, None, None)?;
-        assert_eq!(by_app.len(), 1, "应只剩一个合并后的 claude 桶");
-        assert_eq!(by_app[0].app_type, "claude");
-        assert_eq!(by_app[0].summary.total_requests, 2, "两条行都计入 claude");
-        assert!(
-            !by_app.iter().any(|a| a.app_type == "claude-desktop"),
-            "不应再出现 claude-desktop 桶"
-        );
-
-        // ② 选中 claude 过滤：汇总应同时覆盖 desktop 行。
-        let claude_summary = db.get_usage_summary(None, None, Some("claude"), None, None)?;
-        assert_eq!(claude_summary.total_requests, 2);
-
-        // ③ 请求日志按 claude 过滤返回两行，且 desktop 行投影仍是原始 app_type。
-        let logs = db.get_request_logs(
-            &LogFilters {
-                app_type: Some("claude".to_string()),
-                ..Default::default()
-            },
-            0, // 页码从 0 开始
-            50,
-        )?;
-        assert_eq!(logs.total, 2, "claude 过滤含 desktop 行");
-        assert!(
-            logs.data.iter().any(|r| r.app_type == "claude-desktop"),
-            "详情面板需要看到真实入口，行投影不可被折叠"
-        );
-
-        // ④ 折叠不外溢：codex 过滤为空。
-        let codex_summary = db.get_usage_summary(None, None, Some("codex"), None, None)?;
-        assert_eq!(codex_summary.total_requests, 0);
-
-        Ok(())
-    }
 
     #[test]
     fn test_backfill_missing_usage_costs_uses_new_gpt_5_5_pricing() -> Result<(), AppError> {
@@ -5532,23 +5407,16 @@ mod tests {
             "Gemini 日期后缀模型应能回退到 gemini-3-pro-preview 基础定价"
         );
 
-        // Claude Desktop route 短 ID：应通过前缀匹配到带日期的定价
+        // 短模型 ID：应通过前缀匹配到带日期的定价
         let result = find_model_pricing_row(&conn, "claude-haiku-4-5")?;
         assert!(
             result.is_some(),
-            "Claude Desktop 短路由 claude-haiku-4-5 应能匹配到 claude-haiku-4-5-20251001"
+            "短路由 claude-haiku-4-5 应能匹配到 claude-haiku-4-5-20251001"
         );
         let result = find_model_pricing_row(&conn, "anthropic/claude-opus-4.8")?;
         assert!(
             result.is_some(),
             "聚合商点号格式 anthropic/claude-opus-4.8 应能匹配到 claude-opus-4-8"
-        );
-
-        // Claude Desktop 旧版/异常包装的非 Anthropic route：claude-gpt-5.5 → gpt-5.5
-        let result = find_model_pricing_row(&conn, "claude-gpt-5.5")?;
-        assert!(
-            result.is_some(),
-            "带 claude- 包装的非 Anthropic 模型应能剥离后匹配到真实模型定价"
         );
 
         // Bedrock/Vertex 常见形态：provider 前缀 + -vN 后缀 + :0 修饰

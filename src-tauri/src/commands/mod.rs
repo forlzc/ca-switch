@@ -24,11 +24,6 @@ mod s3_sync;
 mod usage;
 mod webdav_sync;
 
-#[cfg(test)]
-mod provider_concurrency_tests;
-#[cfg(test)]
-mod startup_tests;
-
 pub use balance::*;
 pub use coding_plan::*;
 pub use config::*;

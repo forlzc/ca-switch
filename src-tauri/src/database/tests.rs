@@ -11,47 +11,6 @@ use serde_json::json;
 use std::collections::HashMap;
 use tempfile::NamedTempFile;
 
-const LEGACY_SCHEMA_SQL: &str = r#"
-    CREATE TABLE providers (
-        id TEXT NOT NULL,
-        app_type TEXT NOT NULL,
-        name TEXT NOT NULL,
-        settings_config TEXT NOT NULL,
-        PRIMARY KEY (id, app_type)
-    );
-    CREATE TABLE provider_endpoints (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        provider_id TEXT NOT NULL,
-        app_type TEXT NOT NULL,
-        url TEXT NOT NULL
-    );
-    CREATE TABLE mcp_servers (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        server_config TEXT NOT NULL
-    );
-    CREATE TABLE prompts (
-        id TEXT NOT NULL,
-        app_type TEXT NOT NULL,
-        name TEXT NOT NULL,
-        content TEXT NOT NULL,
-        PRIMARY KEY (id, app_type)
-    );
-    CREATE TABLE skills (
-        key TEXT PRIMARY KEY,
-        installed BOOLEAN NOT NULL DEFAULT 0
-    );
-    CREATE TABLE skill_repos (
-        owner TEXT NOT NULL,
-        name TEXT NOT NULL,
-        PRIMARY KEY (owner, name)
-    );
-    CREATE TABLE settings (
-        key TEXT PRIMARY KEY,
-        value TEXT
-    );
-"#;
-
 // v3.8.x（schema v1）的真实表结构快照：用于验证从 v3.8.* 升级到当前版本的迁移链路
 // 参考：tag v3.8.3 的 src-tauri/src/database/schema.rs
 pub(super) const V3_8_SCHEMA_V1_SQL: &str = r#"
@@ -320,7 +279,7 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
         .expect("seed v3.8 schema v1");
     Database::set_user_version(&conn, 1).expect("set user_version=1");
 
-    // 插入一条旧版 Provider + Skill（用于验证迁移不会破坏既有数据）
+    // 插入一条旧版 Provider（用于验证迁移不会破坏既有数据）
     conn.execute(
         "INSERT INTO providers (
             id, app_type, name, settings_config, website_url, category,
@@ -343,12 +302,6 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
         ],
     )
     .expect("seed provider");
-
-    conn.execute(
-        "INSERT INTO skills (key, installed, installed_at) VALUES (?1, ?2, ?3)",
-        params!["claude:demo-skill", 1, 1700000000i64],
-    )
-    .expect("seed legacy skill");
 
     // 按应用启动流程：先 create_tables（补齐新增表），再 apply_schema_migrations（按 user_version 迁移）
     Database::create_tables_on_conn(&conn).expect("create tables");
@@ -392,46 +345,19 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
         .expect("read cost_multiplier");
     assert_eq!(cost_multiplier, "1.0");
 
-    // v2 -> v3：skills 表重建为统一结构，并设置 pending 标记（后续由启动时扫描文件系统重建数据）
-    assert!(
-        Database::has_column(&conn, "skills", "enabled_claude").expect("check skills v3 column"),
-        "skills table should be migrated to v3 structure"
-    );
-    let skills_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM skills", [], |r| r.get(0))
-        .expect("count skills");
-    assert_eq!(skills_count, 0, "skills table should be rebuilt empty");
-
-    let pending: Option<String> = conn
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'skills_ssot_migration_pending'",
-            [],
-            |r| r.get(0),
-        )
-        .ok();
-    assert!(
-        matches!(pending.as_deref(), Some("true") | Some("1")),
-        "skills_ssot_migration_pending should be set after v2->v3 migration"
-    );
-    let snapshot: Option<String> = conn
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'skills_ssot_migration_snapshot'",
-            [],
-            |r| r.get(0),
-        )
-        .ok();
-    let snapshot = snapshot.expect("skills migration snapshot should be recorded");
-    let snapshot_rows: serde_json::Value =
-        serde_json::from_str(&snapshot).expect("parse skills migration snapshot");
-    assert!(
-        snapshot_rows
-            .as_array()
-            .is_some_and(|rows| rows.iter().any(|row| {
-                row.get("directory").and_then(|v| v.as_str()) == Some("demo-skill")
-                    && row.get("app_type").and_then(|v| v.as_str()) == Some("claude")
-            })),
-        "skills migration snapshot should preserve legacy app mapping"
-    );
+    // v27 -> v28：MCP/Skills/Prompts/代理实时备份表已下线，迁移后必须全部删除
+    for table in [
+        "mcp_servers",
+        "skills",
+        "skill_repos",
+        "prompts",
+        "proxy_live_backup",
+    ] {
+        assert!(
+            !Database::table_exists(&conn, table).expect("check dropped table"),
+            "{table} should be dropped after v27 -> v28"
+        );
+    }
 
     // v3.9+ 新增：proxy_config 三行 seed 必须存在（否则 UI 会查不到默认值）
     let proxy_rows: i64 = conn
@@ -456,7 +382,6 @@ fn schema_dry_run_does_not_write_to_disk() {
         version: 2,
         apps,
         mcp: Default::default(),
-        prompts: Default::default(),
         skills: Default::default(),
         common_config_snippets: Default::default(),
         claude_common_config_snippet: None,
@@ -506,7 +431,6 @@ fn dry_run_validates_schema_compatibility() {
         version: 2,
         apps,
         mcp: Default::default(),
-        prompts: Default::default(),
         skills: Default::default(),
         common_config_snippets: Default::default(),
         claude_common_config_snippet: None,

@@ -8,7 +8,6 @@ pub mod exchange_rates;
 pub mod model_fetch;
 pub mod model_pricing;
 pub mod profile;
-pub mod prompt;
 pub mod provider;
 pub mod proxy;
 pub mod s3;
@@ -26,7 +25,6 @@ pub mod webdav_auto_sync;
 pub mod webdav_sync;
 
 pub use config::ConfigService;
-pub use prompt::PromptService;
 pub use provider::{ProviderService, ProviderSortUpdate, SwitchResult};
 pub use proxy::ProxyService;
 #[allow(unused_imports)]

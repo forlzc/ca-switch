@@ -1,14 +1,11 @@
 //! Deep link import functionality for CC Switch
 //!
 //! This module implements the ccswitch:// protocol for importing configurations
-//! via deep links. Supports importing:
-//! - Provider configurations (Claude/Codex/Gemini)
-//! - Prompts
+//! via deep links. Supports importing provider configurations.
 //!
 
 mod icon_fetch;
 mod parser;
-mod prompt;
 mod provider;
 mod utils;
 
@@ -19,7 +16,6 @@ use std::sync::Mutex;
 // Re-export public API
 pub use icon_fetch::fetch_deeplink_icon;
 pub use parser::parse_deeplink_url;
-pub use prompt::import_prompt_from_deeplink;
 pub use provider::{import_provider_from_deeplink, parse_and_merge_config};
 
 /// 等前端处理的深链接（解析结果或解析错误）
@@ -81,17 +77,17 @@ pub fn ack_pending_deeplink(id: u64) {
 pub struct DeepLinkImportRequest {
     /// Protocol version (e.g., "v1")
     pub version: String,
-    /// Resource type to import: "provider" | "prompt"
+    /// Resource type to import: "provider"
     pub resource: String,
 
     // ============ Common fields ============
-    /// Target application (e.g. claude/codex/gemini/agy) - for provider and prompt
+    /// Target application (e.g. claude) - for provider
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
     /// Resource name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// 导入后是否立即生效：供应商（切换式应用）切过去、累加式应用写进配置文件、提示词启用。
+    /// 导入后是否立即生效：供应商切过去。
     /// 确认框里有对应开关，链接里的值只是开关的初始值，导入时以开关为准。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
@@ -132,14 +128,6 @@ pub struct DeepLinkImportRequest {
     /// 按应用换算成各自的字段（见 `provider::ApiFormat`）。没写时用各应用的默认格式。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_format: Option<String>,
-
-    // ============ Prompt-specific fields ============
-    /// Base64 encoded Markdown content
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    /// Prompt description
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
 
     // ============ Config file fields (v3.8+) ============
     /// Base64 encoded config content
