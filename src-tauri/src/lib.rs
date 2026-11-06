@@ -438,7 +438,7 @@ fn handle_second_instance(app: &tauri::AppHandle, args: Vec<String>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 设置 panic hook，在应用崩溃时记录日志到 <app_config_dir>/crash.log（默认 ~/.cc-switch/crash.log）
+    // 设置 panic hook，在应用崩溃时记录日志到 <app_config_dir>/crash.log（默认 ~/.ca-switch/crash.log）
     panic_hook::setup_panic_hook();
 
     let mut builder = tauri::Builder::default();
@@ -615,44 +615,9 @@ pub fn run() {
             // 初始化数据库
             let app_config_dir = crate::config::get_app_config_dir();
             let db_path = app_config_dir.join("ca-switch.db");
-            let json_path = app_config_dir.join("config.json");
 
-            // 检查是否需要从 config.json 迁移到 SQLite
-            let has_json = json_path.exists();
-            let has_db = db_path.exists();
-
-            // 如果需要迁移，先验证 config.json 是否可以加载（在创建数据库之前）
-            // 这样如果加载失败用户选择退出，数据库文件还没被创建，下次可以正常重试
-            let migration_config = if !has_db && has_json {
-                log::info!("检测到旧版配置文件，验证配置文件...");
-
-                // 循环：支持用户重试加载配置文件
-                loop {
-                    match crate::app_config::MultiAppConfig::load() {
-                        Ok(config) => {
-                            log::info!("✓ 配置文件加载成功");
-                            break Some(config);
-                        }
-                        Err(e) => {
-                            log::error!("加载旧配置文件失败: {e}");
-                            // 弹出系统对话框让用户选择
-                            if !show_migration_error_dialog(app.handle(), &e.to_string()) {
-                                // 用户选择退出（此时数据库还没创建，下次启动可以重试）
-                                log::info!("用户选择退出程序");
-                                std::process::exit(1);
-                            }
-                            // 用户选择重试，继续循环
-                            log::info!("用户选择重试加载配置文件");
-                        }
-                    }
-                }
-            } else {
-                None
-            };
-
-            // 现在创建数据库（包含 Schema 迁移）
+            // 创建数据库（包含 Schema 迁移）
             //
-            // 说明：从 v3.8.* 升级的用户通常会走到这里的 SQLite schema 迁移，
             // 若迁移失败（数据库损坏/权限不足/user_version 过新等），需要给用户明确提示，
             // 否则表现可能只是“应用打不开/闪退”。
             //
@@ -719,30 +684,6 @@ pub fn run() {
                 Err(e) => {
                     log::set_max_level(log::LevelFilter::Info);
                     log::warn!("读取日志配置失败，已回退到 info: {e}");
-                }
-            }
-
-            // 如果有预加载的配置，执行迁移
-            if let Some(config) = migration_config {
-                log::info!("开始执行数据迁移...");
-
-                match db.migrate_from_json(&config) {
-                    Ok(_) => {
-                        log::info!("✓ 配置迁移成功");
-                        // 标记迁移成功，供前端显示 Toast
-                        crate::init_status::set_migration_success();
-                        // 归档旧配置文件（重命名而非删除，便于用户恢复）
-                        let archive_path = json_path.with_extension("json.migrated");
-                        if let Err(e) = std::fs::rename(&json_path, &archive_path) {
-                            log::warn!("归档旧配置文件失败: {e}");
-                        } else {
-                            log::info!("✓ 旧配置已归档为 config.json.migrated");
-                        }
-                    }
-                    Err(e) => {
-                        // 配置加载成功但迁移失败的情况极少（磁盘满等），仅记录日志
-                        log::error!("配置迁移失败: {e}，将从现有配置导入");
-                    }
                 }
             }
 
@@ -1427,7 +1368,7 @@ pub(crate) fn remove_tray_icon_before_exit(app_handle: &tauri::AppHandle) {
 }
 
 // ============================================================
-// 迁移错误对话框辅助函数
+// 初始化失败对话框辅助函数
 // ============================================================
 
 /// 检测是否为中文环境
@@ -1437,57 +1378,6 @@ fn is_chinese_locale() -> bool {
         .or_else(|_| std::env::var("LC_MESSAGES"))
         .map(|lang| lang.starts_with("zh"))
         .unwrap_or(false)
-}
-
-/// 显示迁移错误对话框
-/// 返回 true 表示用户选择重试，false 表示用户选择退出
-fn show_migration_error_dialog(app: &tauri::AppHandle, error: &str) -> bool {
-    let title = if is_chinese_locale() {
-        "配置迁移失败"
-    } else {
-        "Migration Failed"
-    };
-
-    let message = if is_chinese_locale() {
-        format!(
-            "从旧版本迁移配置时发生错误：\n\n{error}\n\n\
-            您的数据尚未丢失，旧配置文件仍然保留。\n\
-            建议回退到旧版本 CC Switch 以保护数据。\n\n\
-            点击「重试」重新尝试迁移\n\
-            点击「退出」关闭程序（可回退版本后重新打开）"
-        )
-    } else {
-        format!(
-            "An error occurred while migrating configuration:\n\n{error}\n\n\
-            Your data is NOT lost - the old config file is still preserved.\n\
-            Consider rolling back to an older CC Switch version.\n\n\
-            Click 'Retry' to attempt migration again\n\
-            Click 'Exit' to close the program"
-        )
-    };
-
-    let retry_text = if is_chinese_locale() {
-        "重试"
-    } else {
-        "Retry"
-    };
-    let exit_text = if is_chinese_locale() {
-        "退出"
-    } else {
-        "Exit"
-    };
-
-    // 使用 blocking_show 同步等待用户响应
-    // OkCancelCustom: 第一个按钮（重试）返回 true，第二个按钮（退出）返回 false
-    app.dialog()
-        .message(&message)
-        .title(title)
-        .kind(MessageDialogKind::Error)
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            retry_text.to_string(),
-            exit_text.to_string(),
-        ))
-        .blocking_show()
 }
 
 /// 显示数据库初始化/Schema 迁移失败对话框
@@ -1510,7 +1400,7 @@ fn show_database_init_error_dialog(
             您的数据尚未丢失，应用不会自动删除数据库文件。\n\
             常见原因包括：数据库版本过新、文件损坏、权限不足、磁盘空间不足等。\n\n\
             建议：\n\
-            1) 先备份整个配置目录（包含 cc-switch.db）\n\
+            1) 先备份整个配置目录（包含 ca-switch.db）\n\
             2) 如果提示“数据库版本过新”，请升级到更新版本\n\
             3) 如果刚升级出现异常，可回退旧版本导出/备份后再升级\n\n\
             点击「重试」重新尝试初始化\n\
@@ -1524,7 +1414,7 @@ fn show_database_init_error_dialog(
             Your data is NOT lost - the app will not delete the database automatically.\n\
             Common causes include: newer database version, corrupted file, permission issues, or low disk space.\n\n\
             Suggestions:\n\
-            1) Back up the entire config directory (including cc-switch.db)\n\
+            1) Back up the entire config directory (including ca-switch.db)\n\
             2) If you see “database version is newer”, please upgrade CC Switch\n\
             3) If this happened right after upgrading, consider rolling back to export/backup then upgrade again\n\n\
             Click 'Retry' to attempt initialization again\n\

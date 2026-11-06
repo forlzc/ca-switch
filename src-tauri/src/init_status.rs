@@ -45,12 +45,6 @@ fn migration_cell() -> &'static RwLock<bool> {
     MIGRATION_SUCCESS.get_or_init(|| RwLock::new(false))
 }
 
-pub fn set_migration_success() {
-    if let Ok(mut guard) = migration_cell().write() {
-        *guard = true;
-    }
-}
-
 /// 获取并消费迁移成功状态（只返回一次 true，之后返回 false）
 pub fn take_migration_success() -> bool {
     if let Ok(mut guard) = migration_cell().write() {

@@ -12,8 +12,8 @@ pub fn ensure_test_home() -> &'static Path {
     static HOME: OnceLock<PathBuf> = OnceLock::new();
     HOME.get_or_init(|| {
         let dir_name = match std::env::var("NEXTEST_TEST_GLOBAL_SLOT") {
-            Ok(slot) => format!("cc-switch-test-home-nextest-{slot}"),
-            Err(_) => "cc-switch-test-home".to_string(),
+            Ok(slot) => format!("ca-switch-test-home-nextest-{slot}"),
+            Err(_) => "ca-switch-test-home".to_string(),
         };
         let base = std::env::temp_dir().join(dir_name);
         if base.exists() {
@@ -34,7 +34,7 @@ pub fn ensure_test_home() -> &'static Path {
 /// 清理测试目录中生成的配置文件与缓存。
 pub fn reset_test_fs() {
     let home = ensure_test_home();
-    for sub in [".claude", ".cc-switch", "profiles"] {
+    for sub in [".claude", ".ca-switch", "profiles"] {
         let path = home.join(sub);
         if path.exists() {
             if let Err(err) = std::fs::remove_dir_all(&path) {

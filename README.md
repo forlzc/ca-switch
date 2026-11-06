@@ -28,7 +28,7 @@ pnpm install
 pnpm tauri dev
 ```
 
-数据目录：`~/.ca-switch/`（首次启动会从 `~/.cc-switch/` 复制旧数据库）。
+数据目录：`~/.ca-switch/`（数据库 `ca-switch.db`）。
 
 ## 致谢
 

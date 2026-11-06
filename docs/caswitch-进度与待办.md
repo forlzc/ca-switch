@@ -194,7 +194,7 @@ cargo test --lib --offline database::backup -- --test-threads=1
 | 包名 | `package.json` → `ca-switch` |
 | crate | `Cargo.toml` → `ca-switch` / `ca_switch_lib`，`main.rs` 同步；集成测试 `use ca_switch_lib` |
 | 打包 | `tauri.conf.json` → `productName: CA Switch`、`identifier: com.ca-switch.desktop` |
-| 数据目录 | 默认 `~/.ca-switch/`、数据库 `ca-switch.db`、日志 `ca-switch`；`migrate_legacy_config_dir` 在新目录无库时从 `~/.cc-switch` 复制旧库（Windows `HOME` 兜底同样走复制） |
+| 数据目录 | 默认 `~/.ca-switch/`、数据库 `ca-switch.db`、日志 `ca-switch`；旧品牌目录迁移逻辑已移除，不再从 `~/.cc-switch` 复制旧库 |
 | 深度链接 | `.desktop` 文件名改为 `ca-switch-handler.desktop` |
 | 前端品牌 | About / 数据库升级文案改为 CA Switch |
 
@@ -508,4 +508,15 @@ git tag -a caswitch-base bc4c4c45 -m "caswitch 重构前基线（fork/build 合�
   「没有 finish reason」；建议后续改为错误分块 + 终止分块。
 - 首包前（未收到 `response.created`）的静默仍无心跳，超长 TTFT 上游仍可能触发超时。
 - `Gemini` 两格真实上游验证仍缺 Key（`Anthropic→Gemini`、`Gemini→Gemini`）。
+
+### 13.4 配置目录统一（2026-11-06）
+
+- 数据库统一为 `~/.ca-switch/ca-switch.db`（此前目录已改名但库文件仍叫 `cc-switch.db`）。
+- 删除旧品牌目录迁移（`migrate_legacy_config_dir`）与 `config.json → SQLite` 启动迁移分支，
+  以及配套的重试对话框与迁移成功标记 setter。
+- 备份前缀统一为 `ca-switch.db.` / `.ca-switch-backup-`；设备级备份目录改为 `~/.ca-switch/backups`。
+- 顺手修复：自动备份此前按 `ca-switch.db` 探测文件，而实际库是 `cc-switch.db`，
+  等于长期未生效，现已与实际文件名一致。
+- 同步更新 README、CONTRIBUTING、flatpak 权限说明与运行时路径注释；前端 localStorage 键、
+  WebDAV/S3 远端目录等非路径标识保持不变。
 

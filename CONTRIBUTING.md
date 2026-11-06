@@ -85,7 +85,7 @@ For a debug build, append `--debug` to the command above. This single-quote form
 
 **Backend**: unit tests live next to the source (`#[cfg(test)]`), and integration tests live in `src-tauri/tests/`. CI runs `cargo test` on Linux, macOS, and Windows.
 
-> **Isolate your real config**: some backend tests read and write directories such as `~/.cc-switch` and `~/.codex`. When running them locally, point `CC_SWITCH_TEST_HOME` at a temporary directory:
+> **Isolate your real config**: some backend tests read and write directories such as `~/.ca-switch` and `~/.codex`. When running them locally, point `CC_SWITCH_TEST_HOME` at a temporary directory:
 >
 > ```bash
 > CC_SWITCH_TEST_HOME="$(mktemp -d)" cargo test
@@ -102,7 +102,7 @@ Frontend (React + TypeScript)
   Components ── Hooks ── TanStack Query ── src/lib/api
                               │ Tauri IPC (invoke)
 Backend (Tauri 2 + Rust)
-  Commands ─► Services ─┬─► DAO ─► SQLite (~/.cc-switch/cc-switch.db)
+  Commands ─► Services ─┬─► DAO ─► SQLite (~/.ca-switch/ca-switch.db)
                         ├─► Live config writers (atomic write)
                         │     ~/.claude, ~/.codex, ~/.gemini, ...
                         └─► Local routing (proxy/): forwarding, format
@@ -111,8 +111,8 @@ Backend (Tauri 2 + Rust)
 
 ### Core Design
 
-- **SSOT** (single source of truth): providers, MCP, prompts, Skills, projects, usage, and other data are all stored in `~/.cc-switch/cc-switch.db` (SQLite)
-- **Device-level settings**: settings that belong to this machine only, such as directory overrides and backup policy, are stored in `~/.cc-switch/settings.json` and are not cloud-synced
+- **SSOT** (single source of truth): providers, MCP, prompts, Skills, projects, usage, and other data are all stored in `~/.ca-switch/ca-switch.db` (SQLite)
+- **Device-level settings**: settings that belong to this machine only, such as directory overrides and backup policy, are stored in `~/.ca-switch/settings.json` and are not cloud-synced
 - **Two write modes**: for switch-mode tools (Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build), switching first backfills the current live config into the current provider (except for Claude Desktop), then writes the new provider; for coexist-mode tools (OpenCode, OpenClaw, Hermes, Pi, MiniMax Code), all providers coexist in a single live file and nothing is backfilled
 - **Atomic writes**: all live configs are written via "temp file + rename" to avoid corruption
 - **Concurrency safety**: the database connection is protected by a Mutex to avoid race conditions
@@ -344,7 +344,7 @@ pnpm tauri build -c '{"bundle":{"createUpdaterArtifacts":false}}'
 
 **后端**：单元测试写在源码旁边（`#[cfg(test)]`），集成测试放在 `src-tauri/tests/`。CI 会在 Linux、macOS 和 Windows 上运行 `cargo test`。
 
-> **隔离真实配置**：部分后端测试会读写 `~/.cc-switch`、`~/.codex` 等目录。本地运行时，建议把 `CC_SWITCH_TEST_HOME` 指向一个临时目录：
+> **隔离真实配置**：部分后端测试会读写 `~/.ca-switch`、`~/.codex` 等目录。本地运行时，建议把 `CC_SWITCH_TEST_HOME` 指向一个临时目录：
 >
 > ```bash
 > CC_SWITCH_TEST_HOME="$(mktemp -d)" cargo test
@@ -361,7 +361,7 @@ Frontend (React + TypeScript)
   Components ── Hooks ── TanStack Query ── src/lib/api
                               │ Tauri IPC (invoke)
 Backend (Tauri 2 + Rust)
-  Commands ─► Services ─┬─► DAO ─► SQLite (~/.cc-switch/cc-switch.db)
+  Commands ─► Services ─┬─► DAO ─► SQLite (~/.ca-switch/ca-switch.db)
                         ├─► Live config writers (atomic write)
                         │     ~/.claude, ~/.codex, ~/.gemini, ...
                         └─► Local routing (proxy/): forwarding, format
@@ -370,8 +370,8 @@ Backend (Tauri 2 + Rust)
 
 ### 核心设计
 
-- **SSOT**（单一事实源）：供应商、MCP、提示词、Skills、项目和用量等数据都存储在 `~/.cc-switch/cc-switch.db`（SQLite）
-- **设备级设置**：目录覆盖、备份策略等只属于本机的设置存放在 `~/.cc-switch/settings.json`，不参与云同步
+- **SSOT**（单一事实源）：供应商、MCP、提示词、Skills、项目和用量等数据都存储在 `~/.ca-switch/ca-switch.db`（SQLite）
+- **设备级设置**：目录覆盖、备份策略等只属于本机的设置存放在 `~/.ca-switch/settings.json`，不参与云同步
 - **两种写入模式**：切换式工具（Claude Code、Claude Desktop、Codex、Gemini CLI、Grok Build）切换时，先把当前 live 配置回填到当前供应商（Claude Desktop 除外），再写入新供应商；共存式工具（OpenCode、OpenClaw、Hermes、Pi、MiniMax Code）的所有供应商共存于同一个 live 文件，不做回填
 - **原子写入**：所有 live 配置都通过“临时文件 + 重命名”写入，避免配置损坏
 - **并发安全**：数据库连接由 Mutex 保护，避免竞态条件
