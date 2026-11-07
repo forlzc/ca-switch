@@ -394,7 +394,7 @@ cd .. && pnpm build          # 2f 时
 | 项 | 结果 |
 |---|---|
 | `cargo +1.94.1 check` | **0 error / 0 warning** |
-| `cargo +1.94.1 test --lib` | **1658 passed / 0 failed / 7 ignored**（2026-11-06 最新，含心跳与协议验证用例） |
+| `cargo +1.94.1 test --lib` | **1658 passed / 0 failed / 7 ignored**（2026-11-07 最新，含协议验证用例） |
 | `cargo +1.94.1 test --tests` | **3 passed / 0 failed** |
 | `pnpm typecheck` | **通过** |
 | `pnpm vitest run` | **120 文件 / 787 用例通过** |
@@ -484,7 +484,7 @@ git tag -a caswitch-base bc4c4c45 -m "caswitch 重构前基线（fork/build 合�
 
 | 问题 | 修法 | 提交 |
 |---|---|---|
-| Chat×Responses 长推理静默被判断流（`Response stream ended without a finish reason`） | 转换流改 `tokio::select!`，静默 15s 补空 delta 心跳；新增暂停时钟单测 | `ad576f56` |
+| Chat×Responses 长推理静默被判断流（`Response stream ended without a finish reason`） | 转换流改 `tokio::select!`，静默 15s 补空 delta 心跳；新增暂停时钟单测（该心跳已于 `90c02f8f` 移除） | `ad576f56` |
 | Anthropic 入口模型名被透传，客户端选项未替换为配置模型 | 转发前用供应商配置的上游模型覆盖请求体 `model`，按协议读 `ANTHROPIC_MODEL` / `OPENAI_MODEL` / `GEMINI_MODEL`，空值不覆盖 | `a684854a` |
 | 配置 JSON 固定 Anthropic 字段，与「上游格式」无关 | 新增 `claudeApiFormatConfig.ts`；表单地址 / Key / 模型按协议读写，切协议时自动迁移旧键；后端 Base URL 提取同步 | `a684854a` |
 | 上游格式文案仍写「原生 / 需转换」 | 改为纯协议名，5 个语言包同步 | `a684854a` |
@@ -506,7 +506,7 @@ git tag -a caswitch-base bc4c4c45 -m "caswitch 重构前基线（fork/build 合�
 
 - `response.failed` / SSE `error` 仍不补 `finish_reason` 与 `[DONE]`，客户端会把上游真实原因显示为
   「没有 finish reason」；建议后续改为错误分块 + 终止分块。
-- 首包前（未收到 `response.created`）的静默仍无心跳，超长 TTFT 上游仍可能触发超时。
+- 转换流的空 delta 心跳已整体移除（`90c02f8f`）：完全静默的上游不再被心跳续命，静默期统一交由流式空闲超时（默认 120 秒）收尾；代价是推理阶段连续超时仍可能被截断。
 - `Gemini` 两格真实上游验证仍缺 Key（`Anthropic→Gemini`、`Gemini→Gemini`）。
 
 ### 13.4 配置目录统一（2026-11-06）
