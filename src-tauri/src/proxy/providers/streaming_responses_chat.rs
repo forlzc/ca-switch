@@ -12,15 +12,6 @@ use futures::Stream;
 use futures::StreamExt;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::time::Duration;
-use tokio::time::Instant;
-
-/// 转换流的心跳间隔。
-///
-/// Responses 上游在推理阶段可能长时间只发 reasoning item 事件，转成 Chat 后没有
-/// 任何可输出的分块；下游的流式超时（以及客户端读超时）会把这段静默判定成断流。
-/// 定时补一个空 delta 分块，既不改变正文，又让链路始终有数据流动。
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 
 /// Responses 非流式响应 → Chat Completions 响应。
 pub fn responses_response_to_chat(response: &Value, fallback_model: Option<&str>) -> Value {
@@ -159,77 +150,58 @@ where
         let mut state = ChatStreamState::default();
         let mut finished = false;
 
-        // 推理阶段上游可能长时间没有可转换事件，定时补空 delta 分块防断流
-        let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
-        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        heartbeat.tick().await; // 首个 tick 立即返回，先消费掉
-        let mut last_emit = Instant::now();
-
         tokio::pin!(stream);
 
         'outer: loop {
-            tokio::select! {
-                maybe_chunk = stream.next() => {
-                    let Some(chunk) = maybe_chunk else { break 'outer };
-                    match chunk {
-                        Ok(bytes) => {
-                            sse.push_bytes(&bytes);
-                            while let Some(block) = sse.next_block() {
-                                if block.trim().is_empty() {
-                                    continue;
-                                }
+            let Some(chunk) = stream.next().await else {
+                break 'outer;
+            };
+            match chunk {
+                Ok(bytes) => {
+                    sse.push_bytes(&bytes);
+                    while let Some(block) = sse.next_block() {
+                        if block.trim().is_empty() {
+                            continue;
+                        }
 
-                                let mut event_name: Option<String> = None;
-                                let mut data_parts: Vec<String> = Vec::new();
-                                for line in block.lines() {
-                                    if let Some(event) = strip_sse_field(line, "event") {
-                                        event_name = Some(event.trim().to_string());
-                                    }
-                                    if let Some(data) = strip_sse_field(line, "data") {
-                                        data_parts.push(data.to_string());
-                                    }
-                                }
-                                if data_parts.is_empty() {
-                                    continue;
-                                }
-                                let data = data_parts.join("\n");
-                                if data.trim() == "[DONE]" {
-                                    for event in state.finalize() {
-                                        yield Ok(event);
-                                    }
-                                    return;
-                                }
-                                let Ok(value) = serde_json::from_str::<Value>(&data) else {
-                                    continue;
-                                };
-                                let name = event_name
-                                    .clone()
-                                    .or_else(|| value.get("type").and_then(Value::as_str).map(str::to_string))
-                                    .unwrap_or_default();
-
-                                let mut emitted = false;
-                                for event in state.handle(&name, &value) {
-                                    emitted = true;
-                                    yield Ok(event);
-                                }
-                                if emitted {
-                                    last_emit = Instant::now();
-                                }
-                                if state.completed {
-                                    finished = true;
-                                    break 'outer;
-                                }
+                        let mut event_name: Option<String> = None;
+                        let mut data_parts: Vec<String> = Vec::new();
+                        for line in block.lines() {
+                            if let Some(event) = strip_sse_field(line, "event") {
+                                event_name = Some(event.trim().to_string());
+                            }
+                            if let Some(data) = strip_sse_field(line, "data") {
+                                data_parts.push(data.to_string());
                             }
                         }
-                        Err(_) => break 'outer,
+                        if data_parts.is_empty() {
+                            continue;
+                        }
+                        let data = data_parts.join("\n");
+                        if data.trim() == "[DONE]" {
+                            for event in state.finalize() {
+                                yield Ok(event);
+                            }
+                            return;
+                        }
+                        let Ok(value) = serde_json::from_str::<Value>(&data) else {
+                            continue;
+                        };
+                        let name = event_name
+                            .clone()
+                            .or_else(|| value.get("type").and_then(Value::as_str).map(str::to_string))
+                            .unwrap_or_default();
+
+                        for event in state.handle(&name, &value) {
+                            yield Ok(event);
+                        }
+                        if state.completed {
+                            finished = true;
+                            break 'outer;
+                        }
                     }
                 }
-                _ = heartbeat.tick() => {
-                    if state.started && !state.completed && last_emit.elapsed() >= HEARTBEAT_INTERVAL {
-                        last_emit = Instant::now();
-                        yield Ok(state.heartbeat());
-                    }
-                }
+                Err(_) => break 'outer,
             }
         }
 
@@ -430,11 +402,6 @@ impl ChatStreamState {
         events
     }
 
-    /// 静默期心跳：空 delta 分块，客户端会忽略内容，但链路不会因无数据被判超时。
-    fn heartbeat(&self) -> Bytes {
-        self.chunk(json!({}), None)
-    }
-
     fn chunk(&self, delta: Value, finish_reason: Option<&str>) -> Bytes {
         let body = json!({
             "id": self.id,
@@ -471,6 +438,7 @@ fn chunk_json_mut(chunk: &mut Bytes, key: &str, value: Value) {
 mod tests {
     use super::*;
     use futures::stream;
+    use std::time::Duration;
 
     async fn collect(chunks: Vec<&str>) -> String {
         let chunks: Vec<Result<Bytes, std::io::Error>> = chunks
@@ -497,8 +465,8 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn stalled_upstream_emits_heartbeat_until_finish_reason() {
-        // 上游在首个事件后静默 60s（推理阶段），远超心跳间隔
+    async fn stalled_upstream_completes_without_synthetic_chunks() {
+        // 上游在首个事件后静默 60s（推理阶段）：转换器只等真实事件，不补空分块
         let upstream = stream::unfold(0u8, |step| async move {
             let chunk = match step {
                 0 => Some("event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_hb\",\"model\":\"gpt-5.4\",\"created_at\":123}}\n\n"),
@@ -523,7 +491,7 @@ mod tests {
         let output = String::from_utf8(output.concat()).unwrap();
 
         let events = events(&output);
-        let heartbeats = events
+        let empty_delta_chunks = events
             .iter()
             .filter(|event| {
                 event["choices"][0]["delta"]
@@ -532,9 +500,9 @@ mod tests {
                     && event["choices"][0]["finish_reason"].is_null()
             })
             .count();
-        assert!(
-            heartbeats >= 3,
-            "expected >=3 heartbeats during the 60s stall, got {heartbeats}"
+        assert_eq!(
+            empty_delta_chunks, 0,
+            "静默期不应补空 delta 分块，实际补了 {empty_delta_chunks} 个"
         );
         assert!(events.iter().any(|event| {
             event["choices"][0]["finish_reason"].as_str() == Some("stop")
